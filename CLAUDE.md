@@ -415,6 +415,52 @@ pytest
 
 ## Workflow
 
+### After PR Merge
+
+After the user confirms a PR is merged, always:
+1. `git checkout main`
+2. `git pull origin main`
+3. Create a new feature branch for the next task
+
+Never continue working on the old feature branch after its PR is merged.
+
+### Integration Testing Before User Review
+
+Before asking the user to test new functionality, run integration tests yourself using credentials from `.env`:
+
+1. **Run the tool with minimal data** using a unique prefix (trashed spaces retain their keys):
+   ```bash
+   source .env
+   # Use timestamp-based prefix to avoid conflicts with trashed spaces
+   TEST_PREFIX="AITEST$(date +%H%M%S)"
+   .venv/bin/python confluence_data_generator.py \
+       --url $CONFLUENCE_URL \
+       --email $CONFLUENCE_EMAIL \
+       --count 1 \
+       --spaces 1 \
+       --prefix $TEST_PREFIX
+   ```
+
+2. **Check output for errors** - any API failures, missing methods, wrong parameters
+
+3. **If errors occur:**
+   - Fix the code
+   - Delete the test space via API (moves to trash)
+   - Re-run with the same or new prefix
+
+4. **Clean up after successful test:**
+   ```bash
+   source .env
+   # Delete the space (moves to trash - async operation)
+   # Replace AITEST1234561 with actual space key from output
+   curl -s -u "$CONFLUENCE_EMAIL:$CONFLUENCE_API_TOKEN" -X DELETE \
+       "$CONFLUENCE_URL/rest/api/space/${TEST_PREFIX}1"
+   ```
+
+   **Note:** Purging from trash requires admin UI (Admin → Data Management → Trashed Spaces). There is no REST API for this in Confluence Cloud.
+
+This catches issues like wrong method names, incorrect API parameters, and missing async methods before the user wastes time debugging.
+
 ### Validate Fixes Before Committing
 
 For Python projects, prefer running quick validation tests or API calls after fixes rather than assuming the change works:
@@ -434,6 +480,42 @@ For Python projects, prefer running quick validation tests or API calls after fi
 ```
 
 This catches issues early—before they're committed and before CI runs.
+
+---
+
+## GitHub CLI (gh) Operations
+
+### Replying to PR Review Comments
+
+When replying to individual review comments (code comments, not general PR comments), use:
+
+```bash
+# Correct format - note the -X POST and leading /
+gh api -X POST /repos/{owner}/{repo}/pulls/{pr_number}/comments/{comment_id}/replies \
+    -f body="Your reply here"
+```
+
+**Common mistakes:**
+- Missing `-X POST` (defaults to GET, returns 404)
+- Missing leading `/` in the path
+- Using `repos/` instead of `/repos/`
+
+### Viewing PR Comments
+
+```bash
+# Get all review comments (code comments) with their IDs
+gh api repos/{owner}/{repo}/pulls/{pr_number}/comments \
+    --jq '.[] | "ID: \(.id) | Path: \(.path):\(.line) | Body: \(.body | split("\n")[0])"'
+
+# Get general PR comments (not code comments)
+gh pr view {pr_number} --comments
+```
+
+### Adding a General PR Comment
+
+```bash
+gh pr comment {pr_number} --body "Your comment here"
+```
 
 ---
 
