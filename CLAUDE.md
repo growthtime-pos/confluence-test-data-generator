@@ -31,7 +31,7 @@
 │   ├── base.py                  # ConfluenceAPIClient, RateLimitState (~640 lines)
 │   ├── benchmark.py             # BenchmarkTracker, PhaseMetrics (~400 lines)
 │   ├── checkpoint.py            # CheckpointManager (~620 lines)
-│   ├── spaces.py                # SpaceGenerator (TODO)
+│   ├── spaces.py                # SpaceGenerator (DONE)
 │   ├── pages.py                 # PageGenerator (TODO)
 │   ├── blogposts.py             # BlogpostGenerator (TODO)
 │   ├── attachments.py           # AttachmentGenerator (TODO)
@@ -42,6 +42,7 @@
 │   ├── test_base.py             # ConfluenceAPIClient tests
 │   ├── test_benchmark.py        # BenchmarkTracker tests
 │   ├── test_checkpoint.py       # CheckpointManager tests
+│   ├── test_spaces.py           # SpaceGenerator tests (53 tests)
 │   └── test_user_generator.py   # User generator tests (51 tests)
 ├── .github/workflows/
 │   ├── test.yml                 # Tests with 90% coverage threshold
@@ -135,6 +136,22 @@ class CheckpointManager:
     methods from multiple concurrent tasks.
     """
 ```
+
+### API Integration Gotchas
+
+**Verify endpoints exist before implementing.** Confluence v2/v3 APIs are incomplete—many operations documented for v1 don't exist in newer APIs. Before writing code for a new API call:
+1. Check the [Confluence Cloud REST API docs](https://developer.atlassian.com/cloud/confluence/rest/v2/intro/)
+2. Test the endpoint manually with `curl` or Postman
+3. Be prepared to fall back to v1 (`/rest/api/`) if v2 (`/api/v2/`) doesn't support the operation
+
+When fixing Atlassian/Confluence API issues, always verify **both** the endpoint AND the resource naming conventions. Atlassian Cloud uses site-specific naming that differs from documentation examples:
+
+- **Group names**: Cloud uses `confluence-users-{site-name}` not just `confluence-users`
+- **User IDs**: Account IDs are long alphanumeric strings, not usernames
+- **Space keys**: Query params for lookup (`?keys=KEY`), not path segments (`/spaces/KEY`)
+- **Labels vs Categories**: Both use the same legacy endpoint with different prefixes (`global` vs `team`)
+
+Always test against a real instance after API fixes—mock tests don't catch naming convention issues.
 
 ---
 
@@ -244,8 +261,14 @@ Generation follows this order (defined in `CheckpointManager.PHASE_ORDER`):
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
 | `space` | GET | List spaces |
+| `space/{key}/label` | POST | Add space label (prefix: `global`) or category (prefix: `team`) |
+| `space/{key}/property` | POST | Add space property |
 | `user/current` | GET | Get current user |
 | `content/{id}/child/attachment` | POST | Upload attachment |
+
+**Note on Labels vs Categories**: Both use the same endpoint but with different prefixes in the request body:
+- Labels: `[{"prefix": "global", "name": "label-name"}]`
+- Categories: `[{"prefix": "team", "name": "category-name"}]`
 
 ---
 
@@ -254,20 +277,20 @@ Generation follows this order (defined in `CheckpointManager.PHASE_ORDER`):
 ### Running Tests
 
 ```bash
-# Install dependencies
-pip install -r requirements-dev.txt
+# Install dependencies (use venv)
+.venv/bin/pip install -r requirements-dev.txt
 
 # Run all tests in parallel
-pytest -n auto
+.venv/bin/pytest -n auto
 
 # Run with coverage report
-pytest -n auto --cov=generators --cov-report=term-missing
+.venv/bin/pytest -n auto --cov=generators --cov-report=term-missing
 
 # Run specific test file
-pytest tests/test_checkpoint.py -v
+.venv/bin/pytest tests/test_checkpoint.py -v
 
 # Run tests matching a pattern
-pytest -k "test_dry_run"
+.venv/bin/pytest -k "test_dry_run"
 ```
 
 ### Test Connectivity
@@ -275,7 +298,7 @@ pytest -k "test_dry_run"
 Before running the full generator, verify API credentials:
 
 ```bash
-python test_connectivity.py
+.venv/bin/python test_connectivity.py
 ```
 
 ### Mocking Strategy
@@ -283,6 +306,17 @@ python test_connectivity.py
 - Sync HTTP calls: `responses` library
 - Async HTTP calls: `aioresponses` library
 - File I/O: `tmp_path` pytest fixture
+
+### End-to-End Verification
+
+After implementing a fix, verify the complete data flow end-to-end before considering the task complete—especially for user/permission assignments. Mock tests validate API call structure but don't catch:
+
+- Incorrect resource naming conventions (site-specific names)
+- Missing or deprecated API endpoints
+- Permission/access issues with created resources
+- Data format differences between v1 and v2 APIs
+
+When possible, run a quick manual test against a real Confluence instance after fixing API-related issues.
 
 ---
 
@@ -339,6 +373,68 @@ Based on [Atlassian's sizing guide](https://confluence.atlassian.com/enterprise/
 - **Minimum**: Python 3.12
 - **Target**: `py312` (configured in ruff.toml)
 
+### Running Python Tools (IMPORTANT)
+
+This project uses a virtual environment. **Do NOT use system `python`, `pip`, or `ruff`** - they won't work due to Homebrew's PEP 668 restrictions.
+
+**Option 1: Use venv binaries directly (preferred)**
+```bash
+.venv/bin/python script.py
+.venv/bin/ruff check .
+.venv/bin/ruff format .
+.venv/bin/pytest
+```
+
+**Option 2: Use uvx for one-off tool runs**
+```bash
+uvx ruff check .
+uvx ruff format .
+uvx pytest
+```
+
+**Option 3: Activate the venv first**
+```bash
+source .venv/bin/activate
+python script.py
+ruff check .
+pytest
+```
+
+**Quick reference:**
+| Task | Command |
+|------|---------|
+| Run linter | `.venv/bin/ruff check .` |
+| Fix lint issues | `.venv/bin/ruff check --fix .` |
+| Check formatting | `.venv/bin/ruff format --check .` |
+| Fix formatting | `.venv/bin/ruff format .` |
+| Run tests | `.venv/bin/pytest -n auto` |
+| Run single test | `.venv/bin/pytest tests/test_file.py -v` |
+| Install deps | `.venv/bin/pip install -r requirements.txt` |
+
+---
+
+## Workflow
+
+### Validate Fixes Before Committing
+
+For Python projects, prefer running quick validation tests or API calls after fixes rather than assuming the change works:
+
+```bash
+# Quick unit test validation
+.venv/bin/pytest tests/test_specific.py -v -k "test_name"
+
+# Quick syntax/import check
+.venv/bin/python -c "from generators.spaces import SpaceGenerator; print('OK')"
+
+# Quick API validation (if credentials available)
+.venv/bin/python test_connectivity.py
+
+# Quick lint check
+.venv/bin/ruff check . && .venv/bin/ruff format --check .
+```
+
+This catches issues early—before they're committed and before CI runs.
+
 ---
 
 ## Quick Reference for Common Tasks
@@ -378,5 +474,5 @@ Always check documentation before marking complete:
 
 ---
 
-**Last Updated**: 2026-02-04
+**Last Updated**: 2026-02-05
 **AI Agent Note**: This file is specifically for you. The user-facing docs are in README.md.

@@ -287,50 +287,43 @@ The user generator was built with these key features:
 
 ## Task 6: Space Generator (generators/spaces.py)
 
+**Status: COMPLETED**
+
 **Files:**
 - Create: `generators/spaces.py`
+- Create: `tests/test_spaces.py`
 
-**Step 1: Create spaces.py**
+**Implementation Notes:**
 
-Inherits from `ConfluenceAPIClient`. Methods needed:
+The space generator was built with both sync and async methods for all operations:
 
-```python
-class SpaceGenerator(ConfluenceAPIClient):
-    """Generates Confluence spaces and related items."""
+1. **Space CRUD**: `create_space()`, `create_spaces()`, `get_space()`
+2. **Space Labels**: `add_space_label()`, `add_space_labels()`
+3. **Space Properties**: `set_space_property()`, `set_space_properties()`
+4. **Space Permissions**: `add_space_permission()`, `add_space_permissions()`
+5. **Space Look and Feel**: `set_space_look_and_feel()`, `set_space_look_and_feel_multiple()`
 
-    async def create_space_async(self, key: str, name: str, description: str) -> Optional[dict]:
-        """Create a space via POST /wiki/api/v2/spaces"""
+All methods have async counterparts with `_async` suffix using memory-efficient batching.
 
-    async def create_spaces_async(self, count: int, prefix: str) -> list[dict]:
-        """Create multiple spaces with batching and checkpointing"""
+**API Endpoints Used:**
+- `POST /api/v2/spaces` - Create space
+- `GET /api/v2/spaces?keys={key}` - Get space by key (v2 uses query param, not path)
+- `POST /rest/api/space/{key}/label` - Add label (legacy API, v2 doesn't support)
+- `POST /api/v2/spaces/{id}/categories` - Add category
+- `POST /api/v2/spaces/{id}/properties` - Set property
+- `POST /api/v2/spaces/{id}/permissions` - Add permission
+- `PUT /rest/api/settings/lookandfeel/custom?spaceKey={key}` - Set look and feel (legacy API)
 
-    async def add_space_label_async(self, space_id: str, label: str) -> bool:
-        """Add label to space via POST /wiki/api/v2/spaces/{id}/labels"""
+**Design Decision: Labels vs Categories**
 
-    async def set_space_property_async(self, space_id: str, key: str, value: dict) -> bool:
-        """Set space property via POST /wiki/api/v2/spaces/{id}/properties"""
+Space labels are deprecated in Confluence Cloud, replaced by categories. However, we create BOTH:
+- **Labels**: For backup compatibility (existing backups contain labels that need to be restored)
+- **Categories**: The current Confluence Cloud mechanism for organizing spaces
 
-    async def add_space_permission_async(self, space_id: str, principal_id: str, operations: list) -> bool:
-        """Add permission via POST /wiki/api/v2/spaces/{id}/permissions"""
+When the `--labels` count is specified, both labels AND categories are created in the same ratio.
+This ensures test data covers both the legacy format (for backup/restore testing) and the current format.
 
-    # Sync versions for sequential mode
-    def create_space(self, key: str, name: str, description: str) -> Optional[dict]:
-        ...
-```
-
-Space key format: `{PREFIX}{number}` (e.g., `TESTDATA1`, `TESTDATA2`)
-
-**Step 2: Verify imports work**
-
-Run: `python -c "from generators.spaces import SpaceGenerator; print('OK')"`
-Expected: `OK`
-
-**Step 3: Commit**
-
-```bash
-git add generators/spaces.py
-git commit -m "feat: add space generator"
-```
+**Tests:** 45 tests covering initialization, space operations, labels, categories, properties, permissions, look and feel, and all async variants
 
 ---
 
