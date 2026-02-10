@@ -58,6 +58,7 @@
 │   ├── test_attachments.py      # AttachmentGenerator tests (53 tests)
 │   ├── test_pages.py            # PageGenerator tests (52 tests)
 │   ├── test_spaces.py           # SpaceGenerator tests (55 tests)
+│   ├── test_cleanup.py          # Cleanup command tests (21 tests)
 │   └── test_user_generator.py   # User generator tests (51 tests)
 ├── .github/workflows/
 │   ├── test.yml                 # Tests with 90% coverage threshold
@@ -509,12 +510,14 @@ When possible, run a quick manual test against a real Confluence instance after 
 | `--spaces` | No | Override number of spaces | calculated |
 | `--concurrency` | No | Max concurrent requests | `5` |
 | `--request-delay` | No | Delay between API calls in sync loops (seconds) | `0.0` |
-| `--settling-delay` | No | Delay before version creation to let Confluence settle | `1.0` |
+| `--settling-delay` | No | Delay before version creation to let Confluence settle | `0.0` |
 | `--content-only` | No | Only create spaces, pages, blogposts | `false` |
 | `--dry-run` | No | Preview without API calls | `false` |
 | `--resume` | No | Resume from checkpoint | `false` |
 | `--no-checkpoint` | No | Disable checkpointing | `false` |
 | `--no-async` | No | Use synchronous mode | `false` |
+| `--cleanup` | No | Delete all test spaces matching the prefix instead of generating data | `false` |
+| `--yes` | No | Skip confirmation prompt during cleanup | `false` |
 | `--verbose` | No | Enable debug logging | `false` |
 
 **Note**: API token is read from `CONFLUENCE_API_TOKEN` environment variable or `.env` file. Never pass tokens via command line.
