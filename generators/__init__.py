@@ -6,6 +6,7 @@ from .benchmark import BenchmarkTracker
 from .blogposts import BlogPostGenerator
 from .checkpoint import CheckpointManager
 from .comments import CommentGenerator
+from .content import ContentCache, ContentGenerator
 from .folders import FolderGenerator
 from .pages import PageGenerator
 from .spaces import SpaceGenerator
@@ -16,6 +17,8 @@ __all__ = [
     "BlogPostGenerator",
     "CommentGenerator",
     "ConfluenceAPIClient",
+    "ContentCache",
+    "ContentGenerator",
     "FolderGenerator",
     "RateLimitState",
     "BenchmarkTracker",

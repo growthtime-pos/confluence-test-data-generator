@@ -26,6 +26,7 @@ from generators.benchmark import BenchmarkTracker
 from generators.blogposts import BlogPostGenerator
 from generators.checkpoint import CheckpointManager
 from generators.comments import CommentGenerator
+from generators.content import ContentCache, ContentGenerator
 from generators.folders import FolderGenerator
 from generators.pages import PageGenerator
 from generators.spaces import SpaceGenerator
@@ -117,6 +118,8 @@ class ConfluenceDataGenerator:
         settling_delay: float = 0.0,
         content_only: bool = False,
         checkpoint_manager: CheckpointManager | None = None,
+        language: str = "lorem",
+        content_cache: "ContentCache | None" = None,
     ):
         """Initialize the data generator.
 
@@ -132,6 +135,8 @@ class ConfluenceDataGenerator:
             settling_delay: Delay before version creation in seconds
             content_only: If True, only create spaces, pages, blogposts
             checkpoint_manager: Optional checkpoint manager for resumable runs
+            language: Content language - lorem, ko, en, or mixed
+            content_cache: Optional ContentCache instance for AI-generated content
         """
         self.confluence_url = confluence_url.rstrip("/")
         self.email = email
@@ -144,6 +149,8 @@ class ConfluenceDataGenerator:
         self.settling_delay = settling_delay
         self.content_only = content_only
         self.checkpoint = checkpoint_manager
+        self.language = language
+        self.content_cache = content_cache
 
         self.logger = logging.getLogger(__name__)
 
@@ -176,20 +183,27 @@ class ConfluenceDataGenerator:
             "settling_delay": self.settling_delay,
         }
 
+        # Content-aware generators get language and cache
+        content_args = {
+            **common_args,
+            "language": self.language,
+            "content_cache": self.content_cache,
+        }
+
         # Initialize space generator
-        self.space_gen = SpaceGenerator(prefix=self.prefix, **common_args)
+        self.space_gen = SpaceGenerator(prefix=self.prefix, **content_args)
 
         # Initialize page generator
-        self.page_gen = PageGenerator(prefix=self.prefix, **common_args)
+        self.page_gen = PageGenerator(prefix=self.prefix, **content_args)
 
         # Initialize blogpost generator
-        self.blogpost_gen = BlogPostGenerator(prefix=self.prefix, **common_args)
+        self.blogpost_gen = BlogPostGenerator(prefix=self.prefix, **content_args)
 
         # Initialize attachment generator
         self.attachment_gen = AttachmentGenerator(prefix=self.prefix, **common_args)
 
         # Initialize comment generator
-        self.comment_gen = CommentGenerator(prefix=self.prefix, **common_args)
+        self.comment_gen = CommentGenerator(prefix=self.prefix, **content_args)
 
         # Initialize folder generator
         self.folder_gen = FolderGenerator(prefix=self.prefix, **common_args)
@@ -1690,6 +1704,257 @@ class ConfluenceDataGenerator:
         self._complete_phase("footer_comment_versions")
         self.logger.info(f"Created {created} footer comment versions")
 
+    # ========== INCREMENTAL MODE ==========
+
+    def _discover_existing_spaces(self) -> list[dict[str, str]]:
+        """Discover existing spaces matching the prefix.
+
+        Returns:
+            List of space dicts with 'key', 'id', 'name'
+        """
+        spaces = []
+        key_prefix = self.prefix[:6].upper()
+        self.logger.info(f"Discovering existing spaces with prefix '{key_prefix}'...")
+
+        # Try sequential keys: PREFIX1, PREFIX2, etc.
+        for i in range(1, 1000):
+            space_key = f"{key_prefix}{i}"
+            space = self.space_gen.get_space(space_key)
+            if space:
+                spaces.append(space)
+            else:
+                break
+
+        self.logger.info(f"Found {len(spaces)} existing spaces")
+        return spaces
+
+    async def _discover_existing_pages(self, spaces: list[dict[str, str]]) -> list[dict[str, str]]:
+        """Discover existing pages in spaces.
+
+        Returns:
+            List of page dicts with 'id', 'title', 'spaceId'
+        """
+        all_pages: list[dict[str, str]] = []
+
+        for space in spaces:
+            space_id = space["id"]
+            cursor = None
+
+            while True:
+                params: dict[str, str | int] = {"space-id": space_id, "limit": 250, "status": "current"}
+                if cursor:
+                    params["cursor"] = cursor
+
+                success, result = await self.page_gen._api_call_async("GET", "pages", params=params)
+                if not success or not result:
+                    break
+
+                for page in result.get("results", []):
+                    all_pages.append(
+                        {
+                            "id": page.get("id"),
+                            "title": page.get("title"),
+                            "spaceId": space_id,
+                        }
+                    )
+
+                next_link = result.get("_links", {}).get("next")
+                if not next_link:
+                    break
+                import urllib.parse as _urlparse
+
+                parsed = _urlparse.urlparse(next_link)
+                params_q = _urlparse.parse_qs(parsed.query)
+                cursor = params_q.get("cursor", [None])[0]
+                if not cursor:
+                    break
+
+        self.logger.info(f"Found {len(all_pages)} existing pages")
+        return all_pages
+
+    async def _discover_existing_blogposts(self, spaces: list[dict[str, str]]) -> list[dict[str, str]]:
+        """Discover existing blogposts in spaces.
+
+        Returns:
+            List of blogpost dicts with 'id', 'title', 'spaceId'
+        """
+        all_blogposts: list[dict[str, str]] = []
+
+        for space in spaces:
+            space_id = space["id"]
+            cursor = None
+
+            while True:
+                params: dict[str, str | int] = {"space-id": space_id, "limit": 250, "status": "current"}
+                if cursor:
+                    params["cursor"] = cursor
+
+                success, result = await self.blogpost_gen._api_call_async("GET", "blogposts", params=params)
+                if not success or not result:
+                    break
+
+                for bp in result.get("results", []):
+                    all_blogposts.append(
+                        {
+                            "id": bp.get("id"),
+                            "title": bp.get("title"),
+                            "spaceId": space_id,
+                        }
+                    )
+
+                next_link = result.get("_links", {}).get("next")
+                if not next_link:
+                    break
+                import urllib.parse as _urlparse
+
+                parsed = _urlparse.urlparse(next_link)
+                params_q = _urlparse.parse_qs(parsed.query)
+                cursor = params_q.get("cursor", [None])[0]
+                if not cursor:
+                    break
+
+        self.logger.info(f"Found {len(all_blogposts)} existing blogposts")
+        return all_blogposts
+
+    async def generate_incremental(self, count: int, update_ratio: float = 0.6):
+        """Run incremental mode: update existing docs + add new ones.
+
+        Args:
+            count: Total number of content operations (updates + new)
+            update_ratio: Fraction of count to spend on updates (0.0 - 1.0)
+        """
+        self.benchmark.start_phase("incremental_discovery", 0)
+        self.logger.info("=" * 60)
+        self.logger.info("INCREMENTAL MODE")
+        self.logger.info(f"  Count: {count}, Update ratio: {update_ratio}")
+        self.logger.info("=" * 60)
+
+        # 1. Discovery
+        spaces = self._discover_existing_spaces()
+        if not spaces:
+            self.logger.error("No existing spaces found. Run normal generation first.")
+            self.benchmark.end_phase("incremental_discovery", 0)
+            return
+
+        existing_pages = await self._discover_existing_pages(spaces)
+        existing_blogposts = await self._discover_existing_blogposts(spaces)
+        self.benchmark.end_phase("incremental_discovery", len(existing_pages) + len(existing_blogposts))
+
+        total_existing = len(existing_pages) + len(existing_blogposts)
+        self.logger.info(f"Discovered {total_existing} existing content items")
+
+        # 2. Split count between updates and new content
+        update_count = int(count * update_ratio) if total_existing > 0 else 0
+        new_count = count - update_count
+
+        # Split new content 70/30 pages/blogposts
+        new_pages = int(new_count * 0.7) if new_count > 0 else 0
+        new_blogposts = new_count - new_pages if new_count > 0 else 0
+
+        # Split updates between pages and blogposts proportionally
+        if existing_pages and existing_blogposts and update_count > 0:
+            page_ratio = len(existing_pages) / total_existing
+            update_pages_count = int(update_count * page_ratio)
+            update_blogposts_count = update_count - update_pages_count
+        elif existing_pages and update_count > 0:
+            update_pages_count = update_count
+            update_blogposts_count = 0
+        elif existing_blogposts and update_count > 0:
+            update_pages_count = 0
+            update_blogposts_count = update_count
+        else:
+            update_pages_count = 0
+            update_blogposts_count = 0
+
+        self.logger.info(
+            f"Plan: update {update_pages_count} pages + {update_blogposts_count} blogposts, "
+            f"create {new_pages} new pages + {new_blogposts} new blogposts"
+        )
+
+        # 3. Update existing pages (new versions)
+        if update_pages_count > 0 and existing_pages:
+            import random
+
+            pages_to_update = random.sample(existing_pages, min(update_pages_count, len(existing_pages)))
+            self.benchmark.start_phase("incremental_page_versions", update_pages_count)
+            self.logger.info(f"Creating {update_pages_count} page version updates...")
+
+            created = await self.page_gen.create_page_versions_async(pages_to_update, update_pages_count)
+
+            self.benchmark.end_phase("incremental_page_versions", created)
+            self.logger.info(f"Created {created} page version updates")
+
+        # 4. Update existing blogposts (new versions)
+        if update_blogposts_count > 0 and existing_blogposts:
+            import random
+
+            blogposts_to_update = random.sample(
+                existing_blogposts, min(update_blogposts_count, len(existing_blogposts))
+            )
+            self.benchmark.start_phase("incremental_blogpost_versions", update_blogposts_count)
+            self.logger.info(f"Creating {update_blogposts_count} blogpost version updates...")
+
+            created = await self.blogpost_gen.create_blogpost_versions_async(
+                blogposts_to_update, update_blogposts_count
+            )
+
+            self.benchmark.end_phase("incremental_blogpost_versions", created)
+            self.logger.info(f"Created {created} blogpost version updates")
+
+        # 5. Create new pages
+        if new_pages > 0:
+            self.benchmark.start_phase("incremental_new_pages", new_pages)
+            self.logger.info(f"Creating {new_pages} new pages...")
+
+            pages = await self.page_gen.create_pages_async(spaces, new_pages)
+
+            self.benchmark.end_phase("incremental_new_pages", len(pages))
+            self.logger.info(f"Created {len(pages)} new pages")
+
+        # 6. Create new blogposts
+        if new_blogposts > 0:
+            self.benchmark.start_phase("incremental_new_blogposts", new_blogposts)
+            self.logger.info(f"Creating {new_blogposts} new blogposts...")
+
+            blogposts = await self.blogpost_gen.create_blogposts_async(spaces, new_blogposts)
+
+            self.benchmark.end_phase("incremental_new_blogposts", len(blogposts))
+            self.logger.info(f"Created {len(blogposts)} new blogposts")
+
+        self._log_footer()
+
+
+def generate_content_command(
+    num_topics: int = 10,
+    docs_per_topic: int = 20,
+    ko_ratio: float = 0.7,
+    cache_path: str = "content_cache.json",
+) -> None:
+    """Handle --generate-content CLI command."""
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        print(
+            "Error: ANTHROPIC_API_KEY environment variable required for content generation.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    cache_dir = Path(cache_path).parent if Path(cache_path).parent != Path(".") else Path(".")
+    generator = ContentGenerator(api_key=api_key, cache_dir=cache_dir)
+    if cache_path != "content_cache.json":
+        generator.cache_path = Path(cache_path)
+
+    data = generator.generate_corpus(
+        num_topics=num_topics,
+        docs_per_topic=docs_per_topic,
+        ko_ratio=ko_ratio,
+    )
+
+    total_docs = sum(len(t.get("pages", [])) + len(t.get("blogposts", [])) for t in data.get("topics", {}).values())
+    total_comments = sum(len(t.get("comments", [])) for t in data.get("topics", {}).values())
+    print(f"Generated {total_docs} documents and {total_comments} comments across {len(data.get('topics', {}))} topics")
+    print(f"Cache saved to: {generator.cache_path}")
+
 
 def cleanup_spaces(
     confluence_url: str,
@@ -2002,6 +2267,57 @@ Checkpointing:
         help="Skip confirmation prompt during cleanup",
     )
 
+    # Content generation options
+    parser.add_argument(
+        "--generate-content",
+        action="store_true",
+        help="Generate AI content cache using Claude API (requires ANTHROPIC_API_KEY)",
+    )
+    parser.add_argument(
+        "--topics",
+        type=int,
+        default=10,
+        help="Number of topics for content generation (default: 10, max: 10)",
+    )
+    parser.add_argument(
+        "--docs-per-topic",
+        type=int,
+        default=20,
+        help="Documents per topic for content generation (default: 20)",
+    )
+    parser.add_argument(
+        "--ko-ratio",
+        type=float,
+        default=0.7,
+        help="Korean content ratio for content generation (default: 0.7)",
+    )
+
+    # Language options
+    parser.add_argument(
+        "--language",
+        choices=["lorem", "ko", "en", "mixed"],
+        default="lorem",
+        help="Content language: lorem (default), ko, en, or mixed (requires content cache)",
+    )
+    parser.add_argument(
+        "--content-cache",
+        default="content_cache.json",
+        help="Path to content cache file (default: content_cache.json)",
+    )
+
+    # Incremental mode
+    parser.add_argument(
+        "--incremental",
+        action="store_true",
+        help="Update existing content + add new content (instead of creating from scratch)",
+    )
+    parser.add_argument(
+        "--update-ratio",
+        type=float,
+        default=0.6,
+        help="Ratio of updates vs new content in incremental mode (default: 0.6)",
+    )
+
     args = parser.parse_args()
 
     # Setup logging
@@ -2032,9 +2348,19 @@ Checkpointing:
         )
         return
 
+    # Handle content generation mode
+    if args.generate_content:
+        generate_content_command(
+            num_topics=min(args.topics, 10),
+            docs_per_topic=args.docs_per_topic,
+            ko_ratio=args.ko_ratio,
+            cache_path=args.content_cache,
+        )
+        return
+
     # Validate --count is provided for generation mode
     if args.count is None:
-        print("Error: --count is required unless --cleanup is used.", file=sys.stderr)
+        print("Error: --count is required unless --cleanup or --generate-content is used.", file=sys.stderr)
         sys.exit(1)
 
     # Validate size bucket
@@ -2070,6 +2396,20 @@ Checkpointing:
             else:
                 logging.warning(f"No checkpoint found for prefix '{args.prefix}', starting fresh")
 
+    # Load content cache if language is not lorem
+    content_cache_obj = None
+    if args.language != "lorem":
+        cache_path = Path(args.content_cache)
+        content_cache_obj = ContentCache(cache_path)
+        if not content_cache_obj.load():
+            print(
+                f"Error: Content cache not found at '{cache_path}'. "
+                "Run with --generate-content first, or use --language lorem.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        logging.info(f"Loaded content cache from {cache_path} ({len(content_cache_obj.topics)} topics)")
+
     # Log configuration
     logging.info("=" * 60)
     logging.info("Confluence Test Data Generator")
@@ -2082,6 +2422,8 @@ Checkpointing:
     logging.info(f"Concurrency: {args.concurrency}")
     logging.info(f"Async mode: {not args.no_async}")
     logging.info(f"Content-only: {args.content_only}")
+    logging.info(f"Language: {args.language}")
+    logging.info(f"Incremental: {args.incremental}")
     logging.info(f"Dry run: {args.dry_run}")
     logging.info(f"Checkpointing: {not args.no_checkpoint}")
     logging.info("=" * 60)
@@ -2110,11 +2452,16 @@ Checkpointing:
         settling_delay=args.settling_delay,
         content_only=args.content_only,
         checkpoint_manager=checkpoint_manager,
+        language=args.language,
+        content_cache=content_cache_obj,
     )
 
     # Run generation
     try:
-        if args.no_async:
+        if args.incremental:
+            logging.info("\nStarting incremental generation...")
+            asyncio.run(generator.generate_incremental(args.count, args.update_ratio))
+        elif args.no_async:
             logging.info("\nStarting synchronous generation...")
             generator.generate_sync(args.count, counts)
         else:

@@ -20,6 +20,8 @@ A Python tool to generate realistic test data for Confluence Cloud instances bas
 - **Benchmarking** - Track timing per phase with time estimates for S/M/L/XL instance sizes
 - **Content-Only Mode** - Generate just spaces, pages, and blogposts for scale testing
 - **Performance Optimized** - Connection pooling, text pooling, memory-efficient batching
+- **AI Content Generation** - Pre-generate Korean/English content using Claude API for realistic search testing
+- **Incremental Mode** - Update existing documents and add new ones to simulate ongoing wiki activity
 
 ## What Gets Created
 
@@ -196,6 +198,43 @@ python confluence_data_generator.py \
   --resume
 ```
 
+### AI Content Generation (Korean/English)
+
+```bash
+# Step 1: Generate content cache using Claude API (one-time)
+export ANTHROPIC_API_KEY=sk-ant-...
+python confluence_data_generator.py \
+  --url https://yourcompany.atlassian.net/wiki \
+  --email your.email@company.com \
+  --generate-content \
+  --topics 10 --docs-per-topic 20 --ko-ratio 0.7
+
+# Step 2: Use cached content for data generation
+python confluence_data_generator.py \
+  --url https://yourcompany.atlassian.net/wiki \
+  --email your.email@company.com \
+  --count 100 --language mixed
+
+# Language options: ko (Korean only), en (English only), mixed, lorem (default)
+```
+
+### Incremental Mode (Update + Add)
+
+```bash
+# First run: create initial data
+python confluence_data_generator.py \
+  --url https://yourcompany.atlassian.net/wiki \
+  --email your.email@company.com \
+  --count 100 --language mixed --prefix SEARCH_TEST
+
+# Second run: update 60% of existing docs + add 40% new ones
+python confluence_data_generator.py \
+  --url https://yourcompany.atlassian.net/wiki \
+  --email your.email@company.com \
+  --count 50 --language mixed --prefix SEARCH_TEST \
+  --incremental --update-ratio 0.6
+```
+
 ## CLI Options
 
 | Option | Description | Default |
@@ -216,6 +255,14 @@ python confluence_data_generator.py \
 | `--no-async` | Use synchronous mode | false |
 | `--cleanup` | Delete all test spaces matching the prefix instead of generating data | false |
 | `--yes` | Skip confirmation prompt during cleanup | false |
+| `--generate-content` | Generate AI content cache using Claude API (requires ANTHROPIC_API_KEY) | false |
+| `--topics` | Number of topics for content generation (max 10) | 10 |
+| `--docs-per-topic` | Documents per topic for content generation | 20 |
+| `--ko-ratio` | Korean content ratio (0.0 - 1.0) | 0.7 |
+| `--language` | Content language: lorem, ko, en, or mixed (requires content cache) | lorem |
+| `--content-cache` | Path to content cache file | content_cache.json |
+| `--incremental` | Update existing content + add new content | false |
+| `--update-ratio` | Ratio of updates vs new content in incremental mode | 0.6 |
 | `--verbose` | Enable debug logging | false |
 
 ## Size Buckets

@@ -31,6 +31,8 @@ class SpaceGenerator(ConfluenceAPIClient):
         request_delay: float = 0.0,
         settling_delay: float = 0.0,
         checkpoint: "CheckpointManager | None" = None,
+        language: str = "lorem",
+        content_cache: Any | None = None,
     ):
         super().__init__(
             confluence_url,
@@ -41,6 +43,8 @@ class SpaceGenerator(ConfluenceAPIClient):
             benchmark,
             request_delay,
             settling_delay,
+            language=language,
+            content_cache=content_cache,
         )
         self.prefix = prefix
         self.checkpoint = checkpoint

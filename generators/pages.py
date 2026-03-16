@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from .base import ConfluenceAPIClient
+from .content import TOPIC_IDS
 
 if TYPE_CHECKING:
     from .checkpoint import CheckpointManager
@@ -31,6 +32,8 @@ class PageGenerator(ConfluenceAPIClient):
         request_delay: float = 0.0,
         settling_delay: float = 0.0,
         checkpoint: "CheckpointManager | None" = None,
+        language: str = "lorem",
+        content_cache: Any | None = None,
     ):
         super().__init__(
             confluence_url,
@@ -41,6 +44,8 @@ class PageGenerator(ConfluenceAPIClient):
             benchmark,
             request_delay,
             settling_delay,
+            language=language,
+            content_cache=content_cache,
         )
         self.prefix = prefix
         self.checkpoint = checkpoint
@@ -55,11 +60,43 @@ class PageGenerator(ConfluenceAPIClient):
 
     # ========== PAGE OPERATIONS ==========
 
+    def _get_cached_page_content(self, page_index: int) -> tuple[str, str] | None:
+        """Get title and body from content cache based on page index.
+
+        Returns (title, body) tuple or None if cache not available.
+        """
+        if not self.content_cache or self.language == "lorem" or not TOPIC_IDS:
+            return None
+        topic_index = page_index % len(TOPIC_IDS)
+        topic = TOPIC_IDS[topic_index]
+        doc_index = page_index // len(TOPIC_IDS)
+        content = self.content_cache.get_content_by_language(topic, "pages", doc_index, self.language)
+        if content:
+            return (content["title"], content["body"])
+        return None
+
+    def _get_cached_version_content(self, page_index: int, version_index: int) -> tuple[str, str] | None:
+        """Get version body and message from content cache.
+
+        Returns (body, version_message) tuple or None if cache not available.
+        """
+        if not self.content_cache or self.language == "lorem" or not TOPIC_IDS:
+            return None
+        topic_index = page_index % len(TOPIC_IDS)
+        topic = TOPIC_IDS[topic_index]
+        doc_index = page_index // len(TOPIC_IDS)
+        content = self.content_cache.get_content_by_language(topic, "pages", doc_index, self.language)
+        if content and content.get("updates"):
+            update = content["updates"][version_index % len(content["updates"])]
+            return (update["body"], update.get("version_message", "Content update"))
+        return None
+
     def create_page(
         self,
         space_id: str,
         title: str,
         parent_id: str | None = None,
+        page_index: int = 0,
     ) -> dict[str, str] | None:
         """Create a single page.
 
@@ -67,11 +104,16 @@ class PageGenerator(ConfluenceAPIClient):
             space_id: Space ID to create the page in
             title: Page title
             parent_id: Optional parent page ID for hierarchy
+            page_index: Sequential index for content cache lookup
 
         Returns:
             Dict with 'id', 'title', 'spaceId' (and 'parentId' if set) or None on failure
         """
-        body_content = f"<p>{self.generate_random_text(10, 30)}</p>"
+        cached = self._get_cached_page_content(page_index)
+        if cached:
+            title, body_content = cached
+        else:
+            body_content = f"<p>{self.generate_random_text(10, 30)}</p>"
 
         page_data: dict[str, Any] = {
             "spaceId": space_id,
@@ -160,7 +202,7 @@ class PageGenerator(ConfluenceAPIClient):
                     # Level 2+ child - parent is any existing page
                     parent_id = random.choice(existing)["id"]
 
-            page = self.create_page(space_id, title, parent_id=parent_id)
+            page = self.create_page(space_id, title, parent_id=parent_id, page_index=i)
             if page:
                 created_pages.append(page)
                 space_pages[space_id].append(page)
@@ -450,6 +492,7 @@ class PageGenerator(ConfluenceAPIClient):
         max_conflict_retries = 5
         for retry in range(max_conflict_retries):
             new_body = f"<p>{self.generate_random_text(10, 30)}</p>"
+            version_message = f"Auto-generated version {current_version + 1}"
             update_data = {
                 "id": page_id,
                 "status": "current",
@@ -460,7 +503,7 @@ class PageGenerator(ConfluenceAPIClient):
                 },
                 "version": {
                     "number": current_version + 1,
-                    "message": f"Auto-generated version {current_version + 1}",
+                    "message": version_message,
                 },
             }
 
@@ -520,6 +563,7 @@ class PageGenerator(ConfluenceAPIClient):
         space_id: str,
         title: str,
         parent_id: str | None = None,
+        page_index: int = 0,
     ) -> dict[str, str] | None:
         """Create a single page asynchronously.
 
@@ -527,11 +571,16 @@ class PageGenerator(ConfluenceAPIClient):
             space_id: Space ID to create the page in
             title: Page title
             parent_id: Optional parent page ID
+            page_index: Sequential index for content cache lookup
 
         Returns:
             Dict with 'id', 'title', 'spaceId' or None on failure
         """
-        body_content = f"<p>{self.generate_random_text(10, 30)}</p>"
+        cached = self._get_cached_page_content(page_index)
+        if cached:
+            title, body_content = cached
+        else:
+            body_content = f"<p>{self.generate_random_text(10, 30)}</p>"
 
         page_data: dict[str, Any] = {
             "spaceId": space_id,
@@ -613,7 +662,7 @@ class PageGenerator(ConfluenceAPIClient):
                 else:
                     parent_id = random.choice(existing)["id"]
 
-            page = await self.create_page_async(space_id, title, parent_id=parent_id)
+            page = await self.create_page_async(space_id, title, parent_id=parent_id, page_index=i)
             if page:
                 created_pages.append(page)
                 space_pages[space_id].append(page)
@@ -1005,11 +1054,19 @@ class PageGenerator(ConfluenceAPIClient):
             title = page_titles[page_id]
             page_created = 0
 
-            for _ in range(num_versions):
+            for ver_idx in range(num_versions):
                 max_conflict_retries = 5
                 for retry in range(max_conflict_retries):
                     next_version = current_version + 1
                     new_body = f"<p>{self.generate_random_text(10, 30)}</p>"
+                    version_message = f"Auto-generated version {next_version}"
+
+                    # Try to use cached version content
+                    # page_index is not available here, but we use page_id hash as proxy
+                    cached_ver = self._get_cached_version_content(hash(page_id) % 1000, ver_idx)
+                    if cached_ver:
+                        new_body, version_message = cached_ver
+
                     update_data = {
                         "id": page_id,
                         "status": "current",
@@ -1020,7 +1077,7 @@ class PageGenerator(ConfluenceAPIClient):
                         },
                         "version": {
                             "number": next_version,
-                            "message": f"Auto-generated version {next_version}",
+                            "message": version_message,
                         },
                     }
 

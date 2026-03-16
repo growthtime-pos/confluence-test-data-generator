@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from .base import ConfluenceAPIClient
+from .content import TOPIC_IDS
 
 if TYPE_CHECKING:
     from .checkpoint import CheckpointManager
@@ -31,6 +32,8 @@ class CommentGenerator(ConfluenceAPIClient):
         request_delay: float = 0.0,
         settling_delay: float = 0.0,
         checkpoint: "CheckpointManager | None" = None,
+        language: str = "lorem",
+        content_cache: Any | None = None,
     ):
         super().__init__(
             confluence_url,
@@ -41,6 +44,8 @@ class CommentGenerator(ConfluenceAPIClient):
             benchmark,
             request_delay,
             settling_delay,
+            language=language,
+            content_cache=content_cache,
         )
         self.prefix = prefix
         self.checkpoint = checkpoint
@@ -76,6 +81,18 @@ class CommentGenerator(ConfluenceAPIClient):
             clean = re.sub(r"[^a-zA-Z]", "", word)
             if len(clean) >= 4:
                 return clean
+        return None
+
+    def _get_cached_comment_body(self, index: int) -> str | None:
+        """Get comment body from content cache based on index."""
+        if not self.content_cache or self.language == "lorem" or not TOPIC_IDS:
+            return None
+        topic_index = index % len(TOPIC_IDS)
+        topic = TOPIC_IDS[topic_index]
+        doc_index = index // len(TOPIC_IDS)
+        content = self.content_cache.get_content_by_language(topic, "comments", doc_index, self.language)
+        if content:
+            return f"<p>{content['body']}</p>"
         return None
 
     def _get_page_text_selection(self, page_id: str) -> str | None:
@@ -137,7 +154,7 @@ class CommentGenerator(ConfluenceAPIClient):
         Returns:
             Dict with 'id' and 'pageId' or None on failure
         """
-        body_content = f"<p>{self.generate_random_text(5, 15)}</p>"
+        body_content = self._get_cached_comment_body(index) or f"<p>{self.generate_random_text(5, 15)}</p>"
 
         comment_data: dict[str, Any] = {
             "pageId": page_id,
@@ -227,7 +244,7 @@ class CommentGenerator(ConfluenceAPIClient):
             self.logger.warning(f"Failed to get page text for inline comment on page {page_id}")
             return None
 
-        body_content = f"<p>{self.generate_random_text(5, 15)}</p>"
+        body_content = self._get_cached_comment_body(index) or f"<p>{self.generate_random_text(5, 15)}</p>"
 
         comment_data: dict[str, Any] = {
             "pageId": page_id,
@@ -402,7 +419,7 @@ class CommentGenerator(ConfluenceAPIClient):
         Returns:
             Dict with 'id' and 'pageId' or None on failure
         """
-        body_content = f"<p>{self.generate_random_text(5, 15)}</p>"
+        body_content = self._get_cached_comment_body(index) or f"<p>{self.generate_random_text(5, 15)}</p>"
 
         comment_data: dict[str, Any] = {
             "pageId": page_id,
@@ -498,7 +515,7 @@ class CommentGenerator(ConfluenceAPIClient):
             self.logger.warning(f"Failed to get page text for inline comment on page {page_id}")
             return None
 
-        body_content = f"<p>{self.generate_random_text(5, 15)}</p>"
+        body_content = self._get_cached_comment_body(index) or f"<p>{self.generate_random_text(5, 15)}</p>"
 
         comment_data: dict[str, Any] = {
             "pageId": page_id,
