@@ -121,6 +121,8 @@ class ConfluenceAPIClient:
         benchmark: Any | None = None,
         request_delay: float = 0.0,
         settling_delay: float = 0.0,
+        language: str = "lorem",
+        content_cache: Any | None = None,
     ):
         self.confluence_url = confluence_url.rstrip("/")
         self.email = email
@@ -130,6 +132,8 @@ class ConfluenceAPIClient:
         self.benchmark = benchmark  # Optional BenchmarkTracker for stats
         self.request_delay = request_delay  # Base delay between requests (seconds)
         self.settling_delay = settling_delay  # Delay before version creation (seconds)
+        self.language = language  # Content language: lorem, ko, en, mixed
+        self.content_cache = content_cache  # Optional ContentCache instance
 
         self.rate_limit = RateLimitState()
         self.session = self._create_session()

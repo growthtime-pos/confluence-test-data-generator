@@ -1,4 +1,8 @@
-# CLAUDE.md - Confluence Test Data Generator
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+# Confluence Test Data Generator
 
 ## Project Overview
 
@@ -13,6 +17,8 @@
 - Benchmarking with time extrapolation for planning large runs
 - Pre-generated random text pool for reduced CPU overhead at scale
 - Optimized connection pooling for both sync and async HTTP sessions
+- AI content generation using Claude API for realistic Korean/English content
+- Incremental mode for updating existing documents and adding new ones
 
 **Target User**: Teams who need to test Confluence backup/restore scenarios with realistic data volumes.
 
@@ -45,6 +51,7 @@
 │   ├── pages.py                 # PageGenerator (DONE)
 │   ├── attachments.py           # AttachmentGenerator (DONE)
 │   ├── comments.py              # CommentGenerator (DONE)
+│   ├── content.py               # ContentCache, ContentGenerator — AI content generation & caching
 │   └── templates.py             # TemplateGenerator (DONE)
 ├── tests/                        # Unit tests (90%+ coverage required)
 │   ├── conftest.py              # Shared pytest fixtures
@@ -59,6 +66,8 @@
 │   ├── test_pages.py            # PageGenerator tests (52 tests)
 │   ├── test_spaces.py           # SpaceGenerator tests (55 tests)
 │   ├── test_cleanup.py          # Cleanup command tests (21 tests)
+│   ├── test_content.py          # ContentCache/ContentGenerator tests (26 tests)
+│   ├── test_incremental.py      # Incremental mode tests (14 tests)
 │   └── test_user_generator.py   # User generator tests (51 tests)
 ├── .github/workflows/
 │   ├── test.yml                 # Tests with 90% coverage threshold
@@ -518,6 +527,14 @@ When possible, run a quick manual test against a real Confluence instance after 
 | `--no-async` | No | Use synchronous mode | `false` |
 | `--cleanup` | No | Delete all test spaces matching the prefix instead of generating data | `false` |
 | `--yes` | No | Skip confirmation prompt during cleanup | `false` |
+| `--generate-content` | No | Generate AI content cache using Claude API (requires ANTHROPIC_API_KEY) | `false` |
+| `--topics` | No | Number of topics for content generation (max 10) | `10` |
+| `--docs-per-topic` | No | Documents per topic for content generation | `20` |
+| `--ko-ratio` | No | Korean content ratio (0.0 - 1.0) | `0.7` |
+| `--language` | No | Content language: lorem, ko, en, or mixed (requires content cache) | `lorem` |
+| `--content-cache` | No | Path to content cache file | `content_cache.json` |
+| `--incremental` | No | Update existing content + add new content | `false` |
+| `--update-ratio` | No | Ratio of updates vs new content in incremental mode | `0.6` |
 | `--verbose` | No | Enable debug logging | `false` |
 
 **Note**: API token is read from `CONFLUENCE_API_TOKEN` environment variable or `.env` file. Never pass tokens via command line.
@@ -541,6 +558,7 @@ Based on [Atlassian's sizing guide](https://confluence.atlassian.com/enterprise/
 
 ### Required
 - `aiohttp>=3.9.0`: Async HTTP library
+- `anthropic>=0.40.0`: Claude API SDK (for AI content generation)
 - `python-dotenv>=1.0.0`: Load environment variables
 - `requests>=2.31.0`: Sync HTTP library
 
@@ -737,5 +755,5 @@ Always check documentation before marking complete:
 
 ---
 
-**Last Updated**: 2026-02-10
+**Last Updated**: 2026-03-16
 **AI Agent Note**: This file is specifically for you. The user-facing docs are in README.md.

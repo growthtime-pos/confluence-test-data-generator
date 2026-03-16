@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from .base import ConfluenceAPIClient
+from .content import TOPIC_IDS
 
 if TYPE_CHECKING:
     from .checkpoint import CheckpointManager
@@ -31,6 +32,8 @@ class BlogPostGenerator(ConfluenceAPIClient):
         request_delay: float = 0.0,
         settling_delay: float = 0.0,
         checkpoint: "CheckpointManager | None" = None,
+        language: str = "lorem",
+        content_cache: Any | None = None,
     ):
         super().__init__(
             confluence_url,
@@ -41,6 +44,8 @@ class BlogPostGenerator(ConfluenceAPIClient):
             benchmark,
             request_delay,
             settling_delay,
+            language=language,
+            content_cache=content_cache,
         )
         self.prefix = prefix
         self.checkpoint = checkpoint
@@ -55,21 +60,39 @@ class BlogPostGenerator(ConfluenceAPIClient):
 
     # ========== BLOGPOST OPERATIONS ==========
 
+    def _get_cached_blogpost_content(self, blogpost_index: int) -> tuple[str, str] | None:
+        """Get title and body from content cache based on blogpost index."""
+        if not self.content_cache or self.language == "lorem" or not TOPIC_IDS:
+            return None
+        topic_index = blogpost_index % len(TOPIC_IDS)
+        topic = TOPIC_IDS[topic_index]
+        doc_index = blogpost_index // len(TOPIC_IDS)
+        content = self.content_cache.get_content_by_language(topic, "blogposts", doc_index, self.language)
+        if content:
+            return (content["title"], content["body"])
+        return None
+
     def create_blogpost(
         self,
         space_id: str,
         title: str,
+        blogpost_index: int = 0,
     ) -> dict[str, str] | None:
         """Create a single blog post.
 
         Args:
             space_id: Space ID to create the blog post in
             title: Blog post title
+            blogpost_index: Sequential index for content cache lookup
 
         Returns:
             Dict with 'id', 'title', 'spaceId' or None on failure
         """
-        body_content = f"<p>{self.generate_random_text(10, 30)}</p>"
+        cached = self._get_cached_blogpost_content(blogpost_index)
+        if cached:
+            title, body_content = cached
+        else:
+            body_content = f"<p>{self.generate_random_text(10, 30)}</p>"
 
         blogpost_data: dict[str, Any] = {
             "spaceId": space_id,
@@ -125,7 +148,7 @@ class BlogPostGenerator(ConfluenceAPIClient):
             space_id = space["id"]
             title = f"{self.prefix} Blog Post {i + 1}"
 
-            blogpost = self.create_blogpost(space_id, title)
+            blogpost = self.create_blogpost(space_id, title, blogpost_index=i)
             if blogpost:
                 created_blogposts.append(blogpost)
 
@@ -483,17 +506,23 @@ class BlogPostGenerator(ConfluenceAPIClient):
         self,
         space_id: str,
         title: str,
+        blogpost_index: int = 0,
     ) -> dict[str, str] | None:
         """Create a single blog post asynchronously.
 
         Args:
             space_id: Space ID to create the blog post in
             title: Blog post title
+            blogpost_index: Sequential index for content cache lookup
 
         Returns:
             Dict with 'id', 'title', 'spaceId' or None on failure
         """
-        body_content = f"<p>{self.generate_random_text(10, 30)}</p>"
+        cached = self._get_cached_blogpost_content(blogpost_index)
+        if cached:
+            title, body_content = cached
+        else:
+            body_content = f"<p>{self.generate_random_text(10, 30)}</p>"
 
         blogpost_data: dict[str, Any] = {
             "spaceId": space_id,
@@ -555,7 +584,7 @@ class BlogPostGenerator(ConfluenceAPIClient):
                 space = spaces[i % len(spaces)]
                 space_id = space["id"]
                 title = f"{self.prefix} Blog Post {i + 1}"
-                tasks.append(self.create_blogpost_async(space_id, title))
+                tasks.append(self.create_blogpost_async(space_id, title, blogpost_index=i))
 
             results = await asyncio.gather(*tasks, return_exceptions=True)
             for result in results:
