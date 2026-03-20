@@ -9,9 +9,12 @@
 - Intelligent rate limit handling with exponential backoff and adaptive throttling
 - Production-based multipliers loaded from CSV file
 - Content-only mode (`--content-only`) for scale testing (spaces, pages, blogposts only)
+- Content preview mode (`--preview-content`) for offline manifest generation without Confluence API calls
+- Single-sample preview mode (`--preview-one`) for quota-friendly inspection of one generated document/body at a time
+- Source preview mode (`--source-provider`) for transforming real wiki articles into Confluence XHTML without Confluence API calls
 - Checkpointing for resumable large-scale runs
 - Benchmarking with time extrapolation for planning large runs
-- Pre-generated random text pool for reduced CPU overhead at scale
+- Local LLM-backed content generation for body creation and previewing
 - Optimized connection pooling for both sync and async HTTP sessions
 
 **Target User**: Teams who need to test Confluence backup/restore scenarios with realistic data volumes.
@@ -40,12 +43,14 @@
 │   ├── benchmark.py             # BenchmarkTracker, PhaseMetrics (~489 lines)
 │   ├── blogposts.py             # BlogPostGenerator (DONE)
 │   ├── checkpoint.py            # CheckpointManager (~696 lines)
+│   ├── content.py               # Content provider implementations + factory
 │   ├── folders.py               # FolderGenerator (DONE)
 │   ├── spaces.py                # SpaceGenerator (DONE)
 │   ├── pages.py                 # PageGenerator (DONE)
 │   ├── attachments.py           # AttachmentGenerator (DONE)
 │   ├── comments.py              # CommentGenerator (DONE)
-│   └── templates.py             # TemplateGenerator (DONE)
+│   ├── templates.py             # TemplateGenerator (DONE)
+│   └── wiki_transform.py        # Source article adapters + Confluence renderer scaffold
 ├── tests/                        # Unit tests (90%+ coverage required)
 │   ├── conftest.py              # Shared pytest fixtures
 │   ├── test_base.py             # ConfluenceAPIClient tests (73 tests)
@@ -344,7 +349,23 @@ The v2 `/api/v2/users` endpoint returns 400. Use the v1 CQL search instead:
   - `_truncate_error_response()`: Truncate HTML/long error responses for clean logging
   - `_create_session()`: Create requests session with connection pooling
   - `_get_async_session()`: Get/create aiohttp session with connection pooling
-  - `generate_random_text()`: Get random text from pre-generated pool
+  - `generate_text()`: Get provider-backed plain text
+  - `generate_storage_value()`: Get provider-backed storage XHTML
+
+#### `ContentProvider` family - `generators/content.py`
+- **Purpose**: Document-body generation for live runs and offline preview manifests
+- **Runtime Provider**:
+  - `LocalLlmContentProvider`: Local HTTP-backed generator intended for Ollama-compatible `/api/generate` endpoints
+- **Factory**: `create_content_provider(name, seed)`
+- **Prompting**: LLM prompts are content-type-specific for pages, blogposts, templates, comments, and attachment text rather than one generic prompt
+- **Validation**: LLM responses are checked for completeness (required sections/tags, minimum length, no forbidden `ac:*` tags) and retried before failing
+
+#### `wiki_transform` scaffold - `generators/wiki_transform.py`
+- **Purpose**: Prepare a path from real wiki article sources to Confluence storage XHTML
+- **Current state**:
+  - `WikipediaSourceAdapter`: fetches article summary as initial source input
+  - `NamuWikiSourceAdapter`: explicit placeholder for future implementation
+  - `ConfluenceStorageRenderer`: renders a normalized intermediate document model into storage XHTML
 
 #### `CheckpointManager` - `generators/checkpoint.py`
 - **Purpose**: Track progress and enable resumable data generation
@@ -513,6 +534,16 @@ When possible, run a quick manual test against a real Confluence instance after 
 | `--settling-delay` | No | Delay before version creation to let Confluence settle | `0.0` |
 | `--content-only` | No | Only create spaces, pages, blogposts | `false` |
 | `--dry-run` | No | Preview without API calls | `false` |
+| `--preview-content` | No | Build a preview manifest with representative document bodies and no Confluence API calls | `false` |
+| `--preview-output` | No | Write preview manifest JSON to a file instead of stdout | stdout |
+| `--preview-one` | No | Generate exactly one sample of a selected preview type (`page`, `blogpost`, `template`, etc.) | - |
+| `--source-provider` | No | Preview transformed source content from `wikipedia` or `namuwiki` | - |
+| `--source-title` | No | Article title used with `--source-provider` | - |
+| `--source-language` | No | Source language for wikipedia previews | `en` |
+| `--content-provider` | No | Body generation backend: `local-llm` | `local-llm` |
+| `--local-llm-model` | No | Local LLM model name used for content generation | `qwen2.5:14b-instruct` |
+| `--local-llm-url` | No | Base URL for the local LLM API endpoint | `http://127.0.0.1:11434` |
+| `--content-seed` | No | Deterministic seed for generated document bodies | `42` |
 | `--resume` | No | Resume from checkpoint | `false` |
 | `--no-checkpoint` | No | Disable checkpointing | `false` |
 | `--no-async` | No | Use synchronous mode | `false` |

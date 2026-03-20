@@ -1164,3 +1164,67 @@ Replaced `@responses.activate` decorator with `responses.RequestsMock()` context
 - `tests/test_spaces.py` — `test_add_space_permissions_async_multiple`
 
 Fix pattern was already applied in `test_blogposts.py` (PR #20) and `test_folders.py` (PR #21).
+
+---
+
+## Task G: Pluggable Content Providers + Preview Manifest
+
+**Status: COMPLETED**
+
+Added `generators/content.py` with `StructuredContentProvider`, `LoremContentProvider`, and `create_content_provider()`. `ConfluenceAPIClient` now delegates body/description generation through provider-backed helpers (`generate_text()`, `generate_storage_value()`), and the orchestrator threads a selected provider into all generators.
+
+Added preview-only content generation mode to `confluence_data_generator.py`:
+- `--preview-content` builds a representative JSON manifest without Confluence API calls
+- `--preview-output` writes the manifest to disk instead of stdout
+- `--content-provider` selects `structured` or `lorem`
+- `--content-seed` makes preview/live generated bodies deterministic
+
+Extended the provider work with Gemini support:
+- Added `GeminiContentProvider` using the official `google-genai` SDK
+- Added `--gemini-model` for model selection when `--content-provider gemini` is used
+- Kept tests mocked so validation does not require a live Gemini API key
+- Added automatic fallback from Gemini to `StructuredContentProvider`
+- Added preview manifest quality metadata for headings/lists/tables/word counts per sample
+- Specialized Gemini prompts by content type so pages, templates, comments, and attachment text no longer share one generic prompt
+- Added Gemini response validation/retry logic so truncated or invalid outputs do not get accepted as final content
+- Added `--preview-one` so a single sample can be generated for fast inspection without consuming a full preview manifest's worth of provider calls
+
+## Task H: Move Runtime Generation to Local LLM Only
+
+**Status: IN PROGRESS**
+
+Direction change from synthetic fallback data to local-LLM-only generation:
+- Added `LocalLlmContentProvider` targeting Ollama-compatible `/api/generate`
+- Switched CLI runtime choice to `--content-provider local-llm`
+- Added `--local-llm-model` and `--local-llm-url`
+- Kept provider validation/retry logic for incomplete LLM output
+
+Planned next architecture step:
+- Fetch real article content from NamuWiki / Wikipedia
+- Normalize and clean source markup
+- Transform article structure into Confluence storage XHTML
+- Use the local LLM only for cleanup/rewriting/summarization rather than inventing source material
+
+## Task I: Wiki Source Transformation Scaffold
+
+**Status: IN PROGRESS**
+
+Added initial scaffolding for real-source article transformation:
+- `generators/wiki_transform.py`
+  - `SourceDocument` / `DocumentSection` intermediate model
+  - `WikipediaSourceAdapter` using summary API as initial source
+  - `NamuWikiSourceAdapter` placeholder with explicit `NotImplementedError`
+  - `ConfluenceStorageRenderer` for rendering normalized source material into Confluence-style XHTML
+
+This is intentionally the first thin slice. The next step is to expand source extraction beyond summary text and connect the transformed document path to preview/generation flows.
+
+Progress update:
+- Wikipedia adapter now uses summary + mobile sections to build a section-aware `SourceDocument`
+- Source preview mode added through `--source-provider`, `--source-title`, and `--source-language`
+- NamuWiki adapter now has an initial HTML normalization path for extracting title/paragraph/bullet text
+
+Validation completed with:
+- `py -3.12 -m pytest tests/test_content_preview.py -q`
+- `py -3.12 -m pytest tests/test_pages.py tests/test_blogposts.py tests/test_templates.py -q`
+- `py -3.12 -m ruff check confluence_data_generator.py generators tests/test_content_preview.py`
+- `py -3.12 -m ruff format --check confluence_data_generator.py generators tests/test_content_preview.py`
