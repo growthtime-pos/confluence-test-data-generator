@@ -16,6 +16,8 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+from .content import ContentProvider, StructuredContentProvider
+
 
 @dataclass
 class RateLimitState:
@@ -121,6 +123,7 @@ class ConfluenceAPIClient:
         benchmark: Any | None = None,
         request_delay: float = 0.0,
         settling_delay: float = 0.0,
+        content_provider: ContentProvider | None = None,
     ):
         self.confluence_url = confluence_url.rstrip("/")
         self.email = email
@@ -130,6 +133,7 @@ class ConfluenceAPIClient:
         self.benchmark = benchmark  # Optional BenchmarkTracker for stats
         self.request_delay = request_delay  # Base delay between requests (seconds)
         self.settling_delay = settling_delay  # Delay before version creation (seconds)
+        self.content_provider = content_provider or StructuredContentProvider()
 
         self.rate_limit = RateLimitState()
         self.session = self._create_session()
@@ -692,3 +696,33 @@ class ConfluenceAPIClient:
             pool = cls._text_pool["long"]
 
         return random.choice(pool)
+
+    def generate_text(
+        self,
+        min_words: int = 5,
+        max_words: int = 20,
+        *,
+        kind: str = "generic",
+        title: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        return self.content_provider.generate_text(
+            min_words,
+            max_words,
+            kind=kind,
+            title=title,
+            metadata=metadata,
+        )
+
+    def generate_storage_value(
+        self,
+        content_type: str,
+        title: str,
+        *,
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        return self.content_provider.generate_storage_value(
+            content_type,
+            title,
+            metadata=metadata,
+        )
