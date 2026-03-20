@@ -14,6 +14,7 @@ from .base import ConfluenceAPIClient
 
 if TYPE_CHECKING:
     from .checkpoint import CheckpointManager
+    from .content import ContentProvider
 
 
 class SpaceGenerator(ConfluenceAPIClient):
@@ -30,6 +31,7 @@ class SpaceGenerator(ConfluenceAPIClient):
         benchmark: Any | None = None,
         request_delay: float = 0.0,
         settling_delay: float = 0.0,
+        content_provider: "ContentProvider | None" = None,
         checkpoint: "CheckpointManager | None" = None,
     ):
         super().__init__(
@@ -41,6 +43,7 @@ class SpaceGenerator(ConfluenceAPIClient):
             benchmark,
             request_delay,
             settling_delay,
+            content_provider,
         )
         self.prefix = prefix
         self.checkpoint = checkpoint
@@ -97,7 +100,7 @@ class SpaceGenerator(ConfluenceAPIClient):
             "name": name,
             "description": {
                 "representation": "plain",
-                "value": description or self.generate_random_text(5, 15),
+                "value": description or self.generate_text(5, 15, kind="space_description", title=name),
             },
         }
 
@@ -438,7 +441,7 @@ class SpaceGenerator(ConfluenceAPIClient):
                     "enabled": random.choice([True, False]),
                     "threshold": random.randint(1, 100),
                     "mode": random.choice(["auto", "manual", "scheduled"]),
-                    "description": self.generate_random_text(5, 15),
+                    "description": self.generate_text(5, 15, kind="space_property", title=space_id),
                 },
             }
 
@@ -703,7 +706,7 @@ class SpaceGenerator(ConfluenceAPIClient):
             "name": name,
             "description": {
                 "representation": "plain",
-                "value": description or self.generate_random_text(5, 15),
+                "value": description or self.generate_text(5, 15, kind="space_description", title=name),
             },
         }
 
@@ -884,7 +887,7 @@ class SpaceGenerator(ConfluenceAPIClient):
                         "enabled": random.choice([True, False]),
                         "threshold": random.randint(1, 100),
                         "mode": random.choice(["auto", "manual", "scheduled"]),
-                        "description": self.generate_random_text(5, 15),
+                        "description": self.generate_text(5, 15, kind="space_property", title=space_id),
                     },
                 }
 
