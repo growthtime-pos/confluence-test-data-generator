@@ -14,6 +14,7 @@ from .base import ConfluenceAPIClient
 
 if TYPE_CHECKING:
     from .checkpoint import CheckpointManager
+    from .content import ContentProvider
 
 
 class BlogPostGenerator(ConfluenceAPIClient):
@@ -30,6 +31,7 @@ class BlogPostGenerator(ConfluenceAPIClient):
         benchmark: Any | None = None,
         request_delay: float = 0.0,
         settling_delay: float = 0.0,
+        content_provider: "ContentProvider | None" = None,
         checkpoint: "CheckpointManager | None" = None,
     ):
         super().__init__(
@@ -41,6 +43,7 @@ class BlogPostGenerator(ConfluenceAPIClient):
             benchmark,
             request_delay,
             settling_delay,
+            content_provider,
         )
         self.prefix = prefix
         self.checkpoint = checkpoint
@@ -69,7 +72,7 @@ class BlogPostGenerator(ConfluenceAPIClient):
         Returns:
             Dict with 'id', 'title', 'spaceId' or None on failure
         """
-        body_content = f"<p>{self.generate_random_text(10, 30)}</p>"
+        body_content = self.generate_storage_value("blogpost", title, metadata={"space_id": space_id})
 
         blogpost_data: dict[str, Any] = {
             "spaceId": space_id,
@@ -261,7 +264,7 @@ class BlogPostGenerator(ConfluenceAPIClient):
                     "enabled": random.choice([True, False]),
                     "threshold": random.randint(1, 100),
                     "mode": random.choice(["auto", "manual", "scheduled"]),
-                    "description": self.generate_random_text(5, 15),
+                    "description": self.generate_text(5, 15, kind="blogpost_property", title=blogpost_id),
                 },
             }
 
@@ -413,7 +416,11 @@ class BlogPostGenerator(ConfluenceAPIClient):
 
         max_conflict_retries = 5
         for retry in range(max_conflict_retries):
-            new_body = f"<p>{self.generate_random_text(10, 30)}</p>"
+            new_body = self.generate_storage_value(
+                "blogpost",
+                title,
+                metadata={"blogpost_id": blogpost_id, "version": current_version + 1},
+            )
             update_data = {
                 "id": blogpost_id,
                 "status": "current",
@@ -493,7 +500,7 @@ class BlogPostGenerator(ConfluenceAPIClient):
         Returns:
             Dict with 'id', 'title', 'spaceId' or None on failure
         """
-        body_content = f"<p>{self.generate_random_text(10, 30)}</p>"
+        body_content = self.generate_storage_value("blogpost", title, metadata={"space_id": space_id})
 
         blogpost_data: dict[str, Any] = {
             "spaceId": space_id,
@@ -705,7 +712,7 @@ class BlogPostGenerator(ConfluenceAPIClient):
                         "enabled": random.choice([True, False]),
                         "threshold": random.randint(1, 100),
                         "mode": random.choice(["auto", "manual", "scheduled"]),
-                        "description": self.generate_random_text(5, 15),
+                        "description": self.generate_text(5, 15, kind="blogpost_property", title=blogpost_id),
                     },
                 }
 
@@ -870,7 +877,7 @@ class BlogPostGenerator(ConfluenceAPIClient):
 
         current_version = blogpost_data.get("version", {}).get("number", 1)
 
-        new_body = f"<p>{self.generate_random_text(10, 30)}</p>"
+        new_body = self.generate_storage_value("blogpost", title, metadata={"blogpost_id": blogpost_id, "async": True})
         update_data = {
             "id": blogpost_id,
             "status": "current",
@@ -963,7 +970,11 @@ class BlogPostGenerator(ConfluenceAPIClient):
                 max_conflict_retries = 5
                 for retry in range(max_conflict_retries):
                     next_version = current_version + 1
-                    new_body = f"<p>{self.generate_random_text(10, 30)}</p>"
+                    new_body = self.generate_storage_value(
+                        "blogpost",
+                        title,
+                        metadata={"blogpost_id": blogpost_id, "version": current_version + 1, "async": True},
+                    )
                     update_data = {
                         "id": blogpost_id,
                         "status": "current",

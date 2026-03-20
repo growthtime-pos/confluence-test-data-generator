@@ -14,6 +14,7 @@ from .base import ConfluenceAPIClient
 
 if TYPE_CHECKING:
     from .checkpoint import CheckpointManager
+    from .content import ContentProvider
 
 
 class FolderGenerator(ConfluenceAPIClient):
@@ -30,6 +31,7 @@ class FolderGenerator(ConfluenceAPIClient):
         benchmark: Any | None = None,
         request_delay: float = 0.0,
         settling_delay: float = 0.0,
+        content_provider: "ContentProvider | None" = None,
         checkpoint: "CheckpointManager | None" = None,
     ):
         super().__init__(
@@ -41,6 +43,7 @@ class FolderGenerator(ConfluenceAPIClient):
             benchmark,
             request_delay,
             settling_delay,
+            content_provider,
         )
         self.prefix = prefix
         self.checkpoint = checkpoint
