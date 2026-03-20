@@ -14,6 +14,7 @@ from .base import ConfluenceAPIClient
 
 if TYPE_CHECKING:
     from .checkpoint import CheckpointManager
+    from .content import ContentProvider
 
 
 class PageGenerator(ConfluenceAPIClient):
@@ -30,6 +31,7 @@ class PageGenerator(ConfluenceAPIClient):
         benchmark: Any | None = None,
         request_delay: float = 0.0,
         settling_delay: float = 0.0,
+        content_provider: "ContentProvider | None" = None,
         checkpoint: "CheckpointManager | None" = None,
     ):
         super().__init__(
@@ -41,6 +43,7 @@ class PageGenerator(ConfluenceAPIClient):
             benchmark,
             request_delay,
             settling_delay,
+            content_provider,
         )
         self.prefix = prefix
         self.checkpoint = checkpoint
@@ -71,7 +74,7 @@ class PageGenerator(ConfluenceAPIClient):
         Returns:
             Dict with 'id', 'title', 'spaceId' (and 'parentId' if set) or None on failure
         """
-        body_content = f"<p>{self.generate_random_text(10, 30)}</p>"
+        body_content = self.generate_storage_value("page", title, metadata={"space_id": space_id})
 
         page_data: dict[str, Any] = {
             "spaceId": space_id,
@@ -297,7 +300,7 @@ class PageGenerator(ConfluenceAPIClient):
                     "enabled": random.choice([True, False]),
                     "threshold": random.randint(1, 100),
                     "mode": random.choice(["auto", "manual", "scheduled"]),
-                    "description": self.generate_random_text(5, 15),
+                    "description": self.generate_text(5, 15, kind="page_property", title=page_id),
                 },
             }
 
@@ -449,7 +452,9 @@ class PageGenerator(ConfluenceAPIClient):
 
         max_conflict_retries = 5
         for retry in range(max_conflict_retries):
-            new_body = f"<p>{self.generate_random_text(10, 30)}</p>"
+            new_body = self.generate_storage_value(
+                "page", title, metadata={"page_id": page_id, "version": current_version + 1}
+            )
             update_data = {
                 "id": page_id,
                 "status": "current",
@@ -531,7 +536,7 @@ class PageGenerator(ConfluenceAPIClient):
         Returns:
             Dict with 'id', 'title', 'spaceId' or None on failure
         """
-        body_content = f"<p>{self.generate_random_text(10, 30)}</p>"
+        body_content = self.generate_storage_value("page", title, metadata={"space_id": space_id})
 
         page_data: dict[str, Any] = {
             "spaceId": space_id,
@@ -754,7 +759,7 @@ class PageGenerator(ConfluenceAPIClient):
                         "enabled": random.choice([True, False]),
                         "threshold": random.randint(1, 100),
                         "mode": random.choice(["auto", "manual", "scheduled"]),
-                        "description": self.generate_random_text(5, 15),
+                        "description": self.generate_text(5, 15, kind="page_property", title=page_id),
                     },
                 }
 
@@ -917,7 +922,7 @@ class PageGenerator(ConfluenceAPIClient):
 
         current_version = page_data.get("version", {}).get("number", 1)
 
-        new_body = f"<p>{self.generate_random_text(10, 30)}</p>"
+        new_body = self.generate_storage_value("page", title, metadata={"page_id": page_id, "async": True})
         update_data = {
             "id": page_id,
             "status": "current",
@@ -1009,7 +1014,11 @@ class PageGenerator(ConfluenceAPIClient):
                 max_conflict_retries = 5
                 for retry in range(max_conflict_retries):
                     next_version = current_version + 1
-                    new_body = f"<p>{self.generate_random_text(10, 30)}</p>"
+                    new_body = self.generate_storage_value(
+                        "page",
+                        title,
+                        metadata={"page_id": page_id, "version": current_version + 1, "async": True},
+                    )
                     update_data = {
                         "id": page_id,
                         "status": "current",

@@ -16,10 +16,13 @@ A Python tool to generate realistic test data for Confluence Cloud instances bas
 - **Easy Cleanup** - All items tagged with labels and properties for easy querying
 - **Size-Based Generation** - Supports Small/Medium/Large instance profiles
 - **Dry Run Mode** - Preview what will be created without making changes
+- **Content Preview Mode** - Generate representative document bodies and a JSON manifest without any Confluence API calls
 - **Checkpointing** - Resume interrupted runs for large-scale data generation
 - **Benchmarking** - Track timing per phase with time estimates for S/M/L/XL instance sizes
 - **Content-Only Mode** - Generate just spaces, pages, and blogposts for scale testing
-- **Performance Optimized** - Connection pooling, text pooling, memory-efficient batching
+- **Local LLM Generation** - Generate document bodies through a local LLM endpoint instead of fake lorem/structured filler
+- **Wiki Transform Direction** - Initial scaffolding is in place for turning Wikipedia/NamuWiki source material into Confluence XHTML instead of inventing source content
+- **Performance Optimized** - Connection pooling, content providers, memory-efficient batching
 
 ## What Gets Created
 
@@ -174,6 +177,70 @@ python confluence_data_generator.py \
   --dry-run
 ```
 
+### Content Preview Manifest (No API Required)
+
+```bash
+# Generate representative sample bodies without Confluence credentials
+python confluence_data_generator.py \
+  --count 250 \
+  --preview-content \
+  --content-provider structured \
+  --preview-output preview_manifest.json
+```
+
+This mode generates sample spaces, pages, blog posts, templates, comments, and attachment previews using the selected content provider. It does not require `--url`, `--email`, or `CONFLUENCE_API_TOKEN`.
+
+Preview manifests also include per-sample `quality` metadata such as word count, heading/list/table presence, and rough structure counts so you can evaluate richness quickly.
+
+### Single Preview Sample
+
+```bash
+# Generate exactly one page sample through a local LLM endpoint
+python confluence_data_generator.py \
+  --count 25 \
+  --preview-one page \
+  --content-provider local-llm \
+  --local-llm-model qwen2.5:14b-instruct \
+  --preview-output single_page_preview.json
+```
+
+`--preview-one` supports `space`, `page`, `blogpost`, `template`, `footer_comment`, `inline_comment`, and `attachment`.
+
+### Source Preview From Real Wiki Articles
+
+```bash
+# Preview transformed source content from Wikipedia
+python confluence_data_generator.py \
+  --count 1 \
+  --source-provider wikipedia \
+  --source-title "Disaster recovery" \
+  --source-language en \
+  --preview-output source_preview.json
+```
+
+Current source preview support:
+- `wikipedia`: fetches summary + section content and renders it to Confluence XHTML
+- `namuwiki`: initial HTML normalization path scaffolded for future expansion
+
+### Local LLM Content Provider
+
+```bash
+# Generate preview content through a local Ollama-compatible endpoint
+python confluence_data_generator.py \
+  --count 250 \
+  --preview-content \
+  --content-provider local-llm \
+  --local-llm-model qwen2.5:14b-instruct \
+  --local-llm-url http://127.0.0.1:11434 \
+  --content-seed 42
+```
+
+Local LLM mode expects an Ollama-compatible `POST /api/generate` endpoint. It does not use lorem/structured filler as a runtime fallback: if the local LLM is unavailable or returns invalid output, generation fails loudly.
+
+Local LLM prompts are specialized by document type so pages read more like engineering wiki pages, blog posts read like internal updates, templates read like reusable blueprints, and comments/attachment text stay short and context-appropriate.
+
+Local LLM responses are validated for completeness. Truncated or structurally invalid XHTML/text responses are retried a few times instead of being accepted as low-quality output.
+
 ### Content-Only Mode (For Scale Testing)
 
 ```bash
@@ -211,6 +278,16 @@ python confluence_data_generator.py \
 | `--settling-delay` | Delay before version creation to let Confluence's eventual consistency settle (seconds). Defaults to 0 since retry-on-409 logic handles this automatically; increase if you see excessive 409 retries. | 0.0 |
 | `--content-only` | Only create spaces, pages, blogposts | false |
 | `--dry-run` | Preview without making API calls | false |
+| `--preview-content` | Generate a JSON manifest with representative document bodies and no Confluence API calls | false |
+| `--preview-output` | Write the preview manifest to a file instead of stdout | stdout |
+| `--preview-one` | Generate exactly one sample of a selected type instead of a full preview manifest | - |
+| `--source-provider` | Preview transformed source content from `wikipedia` or `namuwiki` | - |
+| `--source-title` | Article title to fetch when using `--source-provider` | - |
+| `--source-language` | Source language for wikipedia previews | en |
+| `--content-provider` | Content backend for generated document bodies: `local-llm` | local-llm |
+| `--local-llm-model` | Local LLM model name used for content generation | qwen2.5:14b-instruct |
+| `--local-llm-url` | Base URL for the local LLM API endpoint | http://127.0.0.1:11434 |
+| `--content-seed` | Deterministic seed for generated content bodies | 42 |
 | `--resume` | Resume from checkpoint | false |
 | `--no-checkpoint` | Disable checkpointing | false |
 | `--no-async` | Use synchronous mode | false |

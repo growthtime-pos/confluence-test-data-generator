@@ -19,6 +19,7 @@ from .base import ConfluenceAPIClient
 
 if TYPE_CHECKING:
     from .checkpoint import CheckpointManager
+    from .content import ContentProvider
 
 
 class AttachmentGenerator(ConfluenceAPIClient):
@@ -49,6 +50,7 @@ class AttachmentGenerator(ConfluenceAPIClient):
         benchmark: Any | None = None,
         request_delay: float = 0.0,
         settling_delay: float = 0.0,
+        content_provider: "ContentProvider | None" = None,
         checkpoint: "CheckpointManager | None" = None,
     ):
         super().__init__(
@@ -60,6 +62,7 @@ class AttachmentGenerator(ConfluenceAPIClient):
             benchmark,
             request_delay,
             settling_delay,
+            content_provider,
         )
         self.prefix = prefix
         self.checkpoint = checkpoint
@@ -105,7 +108,7 @@ class AttachmentGenerator(ConfluenceAPIClient):
             lines.append('  "data": [\n')
             current_size = sum(len(line.encode()) for line in lines)
             while current_size < size - 20:
-                line = f'    "{self.generate_random_text(3, 8)}",\n'
+                line = f'    "{self.generate_text(3, 8, kind="attachment_json")}",\n'
                 lines.append(line)
                 current_size += len(line.encode())
             lines.append('    "end"\n  ]\n}')
@@ -116,8 +119,9 @@ class AttachmentGenerator(ConfluenceAPIClient):
             current_size = len(lines[0].encode())
             row_num = 1
             while current_size < size:
-                text = self.generate_random_text(3, 8)
-                line = f"{row_num},{text},{self.generate_random_text(5, 12)},{random.randint(1, 1000)}\n"
+                text = self.generate_text(3, 8, kind="attachment_csv")
+                description = self.generate_text(5, 12, kind="attachment_csv")
+                line = f"{row_num},{text},{description},{random.randint(1, 1000)}\n"
                 lines.append(line)
                 current_size += len(line.encode())
                 row_num += 1
@@ -127,7 +131,7 @@ class AttachmentGenerator(ConfluenceAPIClient):
         lines = []
         current_size = 0
         while current_size < size:
-            line = f"{self.generate_random_text(5, 15)}\n"
+            line = f"{self.generate_text(5, 15, kind='attachment_text')}\n"
             lines.append(line)
             current_size += len(line.encode())
         return "".join(lines).encode()

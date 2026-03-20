@@ -15,6 +15,7 @@ from .base import ConfluenceAPIClient
 
 if TYPE_CHECKING:
     from .checkpoint import CheckpointManager
+    from .content import ContentProvider
 
 
 class TemplateGenerator(ConfluenceAPIClient):
@@ -33,6 +34,7 @@ class TemplateGenerator(ConfluenceAPIClient):
         benchmark: Any | None = None,
         request_delay: float = 0.0,
         settling_delay: float = 0.0,
+        content_provider: "ContentProvider | None" = None,
         checkpoint: "CheckpointManager | None" = None,
     ):
         super().__init__(
@@ -44,6 +46,7 @@ class TemplateGenerator(ConfluenceAPIClient):
             benchmark,
             request_delay,
             settling_delay,
+            content_provider,
         )
         self.prefix = prefix
         self.checkpoint = checkpoint
@@ -74,7 +77,7 @@ class TemplateGenerator(ConfluenceAPIClient):
         """
         name = f"{self.prefix} Template {index + 1}"
         template_type = self._TEMPLATE_TYPES[index % 2]
-        body_content = f"<p>{self.generate_random_text(10, 30)}</p>"
+        body_content = self.generate_storage_value("template", name, metadata={"space_key": space_key})
 
         template_data: dict[str, Any] = {
             "name": name,
@@ -167,7 +170,7 @@ class TemplateGenerator(ConfluenceAPIClient):
         """
         name = f"{self.prefix} Template {index + 1}"
         template_type = self._TEMPLATE_TYPES[index % 2]
-        body_content = f"<p>{self.generate_random_text(10, 30)}</p>"
+        body_content = self.generate_storage_value("template", name, metadata={"space_key": space_key})
 
         template_data: dict[str, Any] = {
             "name": name,

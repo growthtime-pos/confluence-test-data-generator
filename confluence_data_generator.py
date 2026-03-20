@@ -10,29 +10,40 @@ high-volume content creation.
 import argparse
 import asyncio
 import csv
+import json
 import logging
 import math
 import os
 import sys
 import urllib.parse
+from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
 
 import requests
-from dotenv import load_dotenv
+
+try:
+    from dotenv import load_dotenv
+except ModuleNotFoundError:
+
+    def load_dotenv() -> bool:
+        return False
+
 
 from generators.attachments import AttachmentGenerator
 from generators.benchmark import BenchmarkTracker
 from generators.blogposts import BlogPostGenerator
 from generators.checkpoint import CheckpointManager
 from generators.comments import CommentGenerator
+from generators.content import ContentProvider, create_content_provider
 from generators.folders import FolderGenerator
 from generators.pages import PageGenerator
 from generators.spaces import SpaceGenerator
 from generators.templates import TemplateGenerator
+from generators.wiki_transform import ConfluenceStorageRenderer, fetch_source_document
 
 
-def load_multipliers_from_csv(csv_path: str | None = None) -> dict[str, dict[str, float]]:
+def load_multipliers_from_csv(csv_path: str | Path | None = None) -> dict[str, dict[str, float]]:
     """Load multipliers from CSV file.
 
     Returns dict keyed by size bucket (small, medium, large),
@@ -117,6 +128,7 @@ class ConfluenceDataGenerator:
         settling_delay: float = 0.0,
         content_only: bool = False,
         checkpoint_manager: CheckpointManager | None = None,
+        content_provider: ContentProvider | None = None,
     ):
         """Initialize the data generator.
 
@@ -144,6 +156,7 @@ class ConfluenceDataGenerator:
         self.settling_delay = settling_delay
         self.content_only = content_only
         self.checkpoint = checkpoint_manager
+        self.content_provider = content_provider or create_content_provider("structured")
 
         self.logger = logging.getLogger(__name__)
 
@@ -174,6 +187,7 @@ class ConfluenceDataGenerator:
             "benchmark": self.benchmark,
             "request_delay": self.request_delay,
             "settling_delay": self.settling_delay,
+            "content_provider": self.content_provider,
         }
 
         # Initialize space generator
@@ -184,6 +198,13 @@ class ConfluenceDataGenerator:
 
         # Initialize blogpost generator
         self.blogpost_gen = BlogPostGenerator(prefix=self.prefix, **common_args)
+
+        if self.content_only:
+            self.attachment_gen = None
+            self.comment_gen = None
+            self.folder_gen = None
+            self.template_gen = None
+            return
 
         # Initialize attachment generator
         self.attachment_gen = AttachmentGenerator(prefix=self.prefix, **common_args)
@@ -1054,10 +1075,14 @@ class ConfluenceDataGenerator:
             await self.space_gen._close_async_session()
             await self.page_gen._close_async_session()
             await self.blogpost_gen._close_async_session()
-            await self.attachment_gen._close_async_session()
-            await self.folder_gen._close_async_session()
-            await self.comment_gen._close_async_session()
-            await self.template_gen._close_async_session()
+            if self.attachment_gen is not None:
+                await self.attachment_gen._close_async_session()
+            if self.folder_gen is not None:
+                await self.folder_gen._close_async_session()
+            if self.comment_gen is not None:
+                await self.comment_gen._close_async_session()
+            if self.template_gen is not None:
+                await self.template_gen._close_async_session()
 
     async def _create_folders_async(self, spaces: list[dict], counts: dict[str, int]) -> list[dict]:
         """Create folders asynchronously.
@@ -1691,6 +1716,381 @@ class ConfluenceDataGenerator:
         self.logger.info(f"Created {created} footer comment versions")
 
 
+def _sample_count(total: int, limit: int) -> int:
+    if total <= 0:
+        return 0
+    return min(total, limit)
+
+
+def summarize_quality_metrics(value: str) -> dict[str, object]:
+    stripped = value.strip()
+    text_only = stripped
+    for token in (
+        "<h2>",
+        "</h2>",
+        "<p>",
+        "</p>",
+        "<ul>",
+        "</ul>",
+        "<li>",
+        "</li>",
+        "<table>",
+        "</table>",
+        "<tbody>",
+        "</tbody>",
+        "<tr>",
+        "</tr>",
+        "<th>",
+        "</th>",
+        "<td>",
+        "</td>",
+    ):
+        text_only = text_only.replace(token, " ")
+    words = [word for word in text_only.split() if word]
+    return {
+        "characters": len(stripped),
+        "words": len(words),
+        "hasHeadings": "<h2>" in stripped,
+        "hasBulletList": "<ul>" in stripped and "<li>" in stripped,
+        "hasTable": "<table>" in stripped,
+        "paragraphCount": stripped.count("<p>"),
+        "headingCount": stripped.count("<h2>"),
+        "listItemCount": stripped.count("<li>"),
+        "tableRowCount": stripped.count("<tr>"),
+    }
+
+
+def manifest_entry_with_quality(entry: Mapping[str, object] | None, content_key: str) -> dict[str, object]:
+    enriched = dict(entry or {})
+    content_value = str(enriched.get(content_key, ""))
+    enriched["quality"] = summarize_quality_metrics(content_value)
+    return enriched
+
+
+def build_content_preview_manifest(
+    prefix: str,
+    size_bucket: str,
+    content_count: int,
+    counts: dict[str, int],
+    content_only: bool,
+    content_provider_name: str,
+    content_seed: int,
+    gemini_model: str,
+    local_llm_model: str,
+    local_llm_url: str,
+) -> dict[str, object]:
+    provider_model = gemini_model if content_provider_name == "gemini" else local_llm_model
+    provider_base_url = local_llm_url if content_provider_name == "local-llm" else None
+    provider = create_content_provider(
+        content_provider_name,
+        seed=content_seed,
+        model=provider_model,
+        base_url=provider_base_url,
+    )
+    common_args = {
+        "confluence_url": "https://preview.invalid/wiki",
+        "email": "preview@example.com",
+        "api_token": "preview-token",
+        "prefix": prefix,
+        "dry_run": True,
+        "content_provider": provider,
+    }
+
+    space_gen = SpaceGenerator(**common_args)
+    page_gen = PageGenerator(**common_args)
+    blogpost_gen = BlogPostGenerator(**common_args)
+    template_gen = TemplateGenerator(**common_args)
+    comment_gen = CommentGenerator(**common_args)
+    attachment_gen = AttachmentGenerator(**common_args)
+
+    space_total = _sample_count(counts.get("space", 0), 2)
+    spaces = space_gen.create_spaces(space_total)
+    page_total = _sample_count(counts.get("page", 0), 4)
+    pages = page_gen.create_pages(spaces, page_total) if spaces and page_total else []
+    blogpost_total = _sample_count(counts.get("blogpost", 0), 2)
+    blogposts = blogpost_gen.create_blogposts(spaces, blogpost_total) if spaces and blogpost_total else []
+
+    template_total = 0 if content_only else _sample_count(counts.get("template", 0), 2)
+    templates = template_gen.create_templates(spaces, template_total) if spaces and template_total else []
+
+    footer_comment = None
+    inline_comment = None
+    if not content_only and pages:
+        footer_comment = comment_gen.create_footer_comment(pages[0]["id"], 1)
+        inline_comment = comment_gen.create_inline_comment(pages[0]["id"], 1)
+
+    attachment_preview = None
+    if not content_only and pages:
+        filename, content, content_type = attachment_gen._get_random_file()
+        attachment_preview = {
+            "filename": filename,
+            "contentType": content_type,
+            "preview": content[:160].decode("utf-8", errors="ignore"),
+        }
+
+    samples = {
+        "spaces": [
+            manifest_entry_with_quality(
+                {
+                    **space,
+                    "description": space_gen.generate_text(5, 15, kind="space_description", title=space["name"]),
+                },
+                "description",
+            )
+            for space in spaces
+        ],
+        "pages": [
+            manifest_entry_with_quality(
+                {
+                    **page,
+                    "body": page_gen.generate_storage_value(
+                        "page", page["title"], metadata={"space_id": page["spaceId"]}
+                    ),
+                },
+                "body",
+            )
+            for page in pages
+        ],
+        "blogposts": [
+            manifest_entry_with_quality(
+                {
+                    **blogpost,
+                    "body": blogpost_gen.generate_storage_value(
+                        "blogpost",
+                        blogpost["title"],
+                        metadata={"space_id": blogpost["spaceId"]},
+                    ),
+                },
+                "body",
+            )
+            for blogpost in blogposts
+        ],
+        "templates": [
+            manifest_entry_with_quality(
+                {
+                    **template,
+                    "body": template_gen.generate_storage_value(
+                        "template",
+                        template["name"],
+                        metadata={"space_key": template["spaceKey"]},
+                    ),
+                },
+                "body",
+            )
+            for template in templates
+        ],
+        "footerComment": (
+            manifest_entry_with_quality(
+                {
+                    **footer_comment,
+                    "body": comment_gen.generate_storage_value(
+                        "footer_comment",
+                        "Footer Comment 1",
+                        metadata={"page_id": pages[0]["id"]},
+                    ),
+                },
+                "body",
+            )
+            if footer_comment and pages
+            else None
+        ),
+        "inlineComment": (
+            manifest_entry_with_quality(
+                {
+                    **inline_comment,
+                    "body": comment_gen.generate_storage_value(
+                        "inline_comment",
+                        "Inline Comment 1",
+                        metadata={"page_id": pages[0]["id"]},
+                    ),
+                },
+                "body",
+            )
+            if inline_comment and pages
+            else None
+        ),
+        "attachment": (manifest_entry_with_quality(attachment_preview, "preview") if attachment_preview else None),
+    }
+
+    return {
+        "mode": "preview-content",
+        "prefix": prefix,
+        "sizeBucket": size_bucket,
+        "targetContentCount": content_count,
+        "contentOnly": content_only,
+        "contentProvider": provider.name,
+        "contentSeed": content_seed,
+        "contentModel": getattr(provider, "model", None),
+        "contentFallback": {
+            "used": bool(getattr(provider, "last_generation_used_fallback", False)),
+            "reason": getattr(provider, "last_fallback_reason", ""),
+        },
+        "plannedCounts": counts,
+        "samples": samples,
+    }
+
+
+def build_single_content_preview(
+    preview_type: str,
+    prefix: str,
+    content_provider_name: str,
+    content_seed: int,
+    gemini_model: str,
+    local_llm_model: str,
+    local_llm_url: str,
+) -> dict[str, object]:
+    provider_model = gemini_model if content_provider_name == "gemini" else local_llm_model
+    provider_base_url = local_llm_url if content_provider_name == "local-llm" else None
+    provider = create_content_provider(
+        content_provider_name,
+        seed=content_seed,
+        model=provider_model,
+        base_url=provider_base_url,
+    )
+    common_args = {
+        "confluence_url": "https://preview.invalid/wiki",
+        "email": "preview@example.com",
+        "api_token": "preview-token",
+        "prefix": prefix,
+        "dry_run": True,
+        "content_provider": provider,
+    }
+
+    space_gen = SpaceGenerator(**common_args)
+    page_gen = PageGenerator(**common_args)
+    blogpost_gen = BlogPostGenerator(**common_args)
+
+    spaces = space_gen.create_spaces(1)
+    space = spaces[0]
+
+    if preview_type == "space":
+        sample = manifest_entry_with_quality(
+            {**space, "description": space_gen.generate_text(5, 15, kind="space_description", title=space["name"])},
+            "description",
+        )
+    elif preview_type == "page":
+        page = page_gen.create_pages(spaces, 1)[0]
+        sample = manifest_entry_with_quality(
+            {
+                **page,
+                "body": page_gen.generate_storage_value("page", page["title"], metadata={"space_id": page["spaceId"]}),
+            },
+            "body",
+        )
+    elif preview_type == "blogpost":
+        blogpost = blogpost_gen.create_blogposts(spaces, 1)[0]
+        sample = manifest_entry_with_quality(
+            {
+                **blogpost,
+                "body": blogpost_gen.generate_storage_value(
+                    "blogpost", blogpost["title"], metadata={"space_id": blogpost["spaceId"]}
+                ),
+            },
+            "body",
+        )
+    elif preview_type == "template":
+        template_gen = TemplateGenerator(**common_args)
+        template = template_gen.create_templates(spaces, 1)[0]
+        sample = manifest_entry_with_quality(
+            {
+                **template,
+                "body": template_gen.generate_storage_value(
+                    "template", template["name"], metadata={"space_key": template["spaceKey"]}
+                ),
+            },
+            "body",
+        )
+    elif preview_type == "footer_comment":
+        comment_gen = CommentGenerator(**common_args)
+        page = page_gen.create_pages(spaces, 1)[0]
+        footer_comment = comment_gen.create_footer_comment(page["id"], 1)
+        sample = manifest_entry_with_quality(
+            {
+                **dict(footer_comment or {}),
+                "body": comment_gen.generate_storage_value(
+                    "footer_comment", "Footer Comment 1", metadata={"page_id": page["id"]}
+                ),
+            },
+            "body",
+        )
+    elif preview_type == "inline_comment":
+        comment_gen = CommentGenerator(**common_args)
+        page = page_gen.create_pages(spaces, 1)[0]
+        inline_comment = comment_gen.create_inline_comment(page["id"], 1)
+        sample = manifest_entry_with_quality(
+            {
+                **dict(inline_comment or {}),
+                "body": comment_gen.generate_storage_value(
+                    "inline_comment", "Inline Comment 1", metadata={"page_id": page["id"]}
+                ),
+            },
+            "body",
+        )
+    elif preview_type == "attachment":
+        attachment_gen = AttachmentGenerator(**common_args)
+        filename, content, content_type = attachment_gen._get_random_file()
+        sample = manifest_entry_with_quality(
+            {
+                "filename": filename,
+                "contentType": content_type,
+                "preview": content[:160].decode("utf-8", errors="ignore"),
+            },
+            "preview",
+        )
+    else:
+        raise ValueError(f"Unsupported preview type: {preview_type}")
+
+    return {
+        "mode": "preview-one",
+        "previewType": preview_type,
+        "prefix": prefix,
+        "contentProvider": provider.name,
+        "contentSeed": content_seed,
+        "contentModel": getattr(provider, "model", None),
+        "contentFallback": {
+            "used": bool(getattr(provider, "last_generation_used_fallback", False)),
+            "reason": getattr(provider, "last_fallback_reason", ""),
+        },
+        "sample": sample,
+    }
+
+
+def write_preview_manifest(manifest: dict[str, object], output_path: str | None) -> None:
+    rendered = json.dumps(manifest, indent=2)
+    if output_path:
+        Path(output_path).write_text(rendered + "\n", encoding="utf-8")
+        print(f"Preview manifest written to {output_path}")
+        return
+    print(rendered)
+
+
+def build_wiki_source_preview(
+    source_provider: str,
+    source_title: str,
+    source_language: str,
+) -> dict[str, object]:
+    document = fetch_source_document(source_provider, source_title, language=source_language)
+    rendered = ConfluenceStorageRenderer().render(document)
+    sample = manifest_entry_with_quality(
+        {
+            "title": document.title,
+            "sourceProvider": document.source_name,
+            "sourceUrl": document.source_url,
+            "summary": document.summary,
+            "sectionCount": len(document.sections),
+            "body": rendered,
+        },
+        "body",
+    )
+    return {
+        "mode": "preview-source",
+        "sourceProvider": source_provider,
+        "sourceTitle": source_title,
+        "sourceLanguage": source_language,
+        "sample": sample,
+    }
+
+
 def cleanup_spaces(
     confluence_url: str,
     email: str,
@@ -1910,10 +2310,9 @@ Checkpointing:
     # Required arguments
     parser.add_argument(
         "--url",
-        required=True,
         help="Confluence Cloud URL (e.g., https://mycompany.atlassian.net/wiki)",
     )
-    parser.add_argument("--email", required=True, help="Atlassian account email")
+    parser.add_argument("--email", help="Atlassian account email")
     parser.add_argument(
         "--count",
         type=int,
@@ -1973,6 +2372,61 @@ Checkpointing:
         help="Show what would be created without making API calls",
     )
     parser.add_argument(
+        "--preview-content",
+        action="store_true",
+        help="Generate a preview manifest with representative document bodies without calling Confluence APIs",
+    )
+    parser.add_argument(
+        "--preview-output",
+        help="Write the preview manifest JSON to a file instead of stdout",
+    )
+    parser.add_argument(
+        "--preview-one",
+        choices=["space", "page", "blogpost", "template", "footer_comment", "inline_comment", "attachment"],
+        help="Generate exactly one sample of the selected content type instead of a full preview manifest",
+    )
+    parser.add_argument(
+        "--source-provider",
+        choices=["wikipedia", "namuwiki"],
+        help="Preview transformed source content from a real wiki provider instead of generated content",
+    )
+    parser.add_argument(
+        "--source-title",
+        help="Article title to fetch when using --source-provider",
+    )
+    parser.add_argument(
+        "--source-language",
+        default="en",
+        help="Source language for wikipedia previews (default: en)",
+    )
+    parser.add_argument(
+        "--content-provider",
+        choices=["local-llm"],
+        default="local-llm",
+        help="Content generation backend to use for generated document bodies (default: local-llm)",
+    )
+    parser.add_argument(
+        "--gemini-model",
+        default="gemini-2.5-flash",
+        help="Gemini model name to use when --content-provider gemini is selected (default: gemini-2.5-flash)",
+    )
+    parser.add_argument(
+        "--local-llm-model",
+        default="qwen2.5:14b-instruct",
+        help="Local LLM model name used when --content-provider local-llm is selected (default: qwen2.5:14b-instruct)",
+    )
+    parser.add_argument(
+        "--local-llm-url",
+        default="http://127.0.0.1:11434",
+        help="Base URL for the local LLM API endpoint (default: http://127.0.0.1:11434)",
+    )
+    parser.add_argument(
+        "--content-seed",
+        type=int,
+        default=42,
+        help="Deterministic seed for generated content bodies (default: 42)",
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable verbose/debug logging",
@@ -2011,21 +2465,32 @@ Checkpointing:
     # Load environment variables from .env file
     load_dotenv()
 
-    # Get API token from environment variable or .env file
+    if args.cleanup or (
+        not args.preview_content and not args.preview_one and not args.source_provider and not args.dry_run
+    ):
+        if not args.url or not args.email:
+            print("Error: --url and --email are required for cleanup or live generation.", file=sys.stderr)
+            sys.exit(1)
+
+    # Get API token from environment variable or .env file when needed
     api_token = os.environ.get("CONFLUENCE_API_TOKEN")
-    if not api_token:
-        print(
-            "Error: Confluence API token required. Set CONFLUENCE_API_TOKEN in .env file or as environment variable.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    if args.cleanup or (
+        not args.preview_content and not args.preview_one and not args.source_provider and not args.dry_run
+    ):
+        if not api_token:
+            print(
+                "Error: Confluence API token required. Set CONFLUENCE_API_TOKEN in .env file or as environment variable.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+    checked_api_token = api_token or ""
 
     # Handle cleanup mode
     if args.cleanup:
         cleanup_spaces(
             confluence_url=args.url,
             email=args.email,
-            api_token=api_token,
+            api_token=checked_api_token,
             prefix=args.prefix,
             skip_confirm=args.yes,
             dry_run=args.dry_run,
@@ -2049,6 +2514,43 @@ Checkpointing:
     if args.spaces is not None:
         counts["space"] = max(1, args.spaces)
         counts["space_v2"] = max(1, args.spaces)
+
+    if args.source_provider:
+        if not args.source_title:
+            print("Error: --source-title is required when --source-provider is used.", file=sys.stderr)
+            sys.exit(1)
+        manifest = build_wiki_source_preview(args.source_provider, args.source_title, args.source_language)
+        write_preview_manifest(manifest, args.preview_output)
+        return
+
+    if args.preview_one:
+        manifest = build_single_content_preview(
+            preview_type=args.preview_one,
+            prefix=args.prefix,
+            content_provider_name=args.content_provider,
+            content_seed=args.content_seed,
+            gemini_model=args.gemini_model,
+            local_llm_model=args.local_llm_model,
+            local_llm_url=args.local_llm_url,
+        )
+        write_preview_manifest(manifest, args.preview_output)
+        return
+
+    if args.preview_content:
+        manifest = build_content_preview_manifest(
+            prefix=args.prefix,
+            size_bucket=args.size,
+            content_count=args.count,
+            counts=counts,
+            content_only=args.content_only,
+            content_provider_name=args.content_provider,
+            content_seed=args.content_seed,
+            gemini_model=args.gemini_model,
+            local_llm_model=args.local_llm_model,
+            local_llm_url=args.local_llm_url,
+        )
+        write_preview_manifest(manifest, args.preview_output)
+        return
 
     # Setup checkpoint manager
     checkpoint_manager = None
@@ -2083,6 +2585,11 @@ Checkpointing:
     logging.info(f"Async mode: {not args.no_async}")
     logging.info(f"Content-only: {args.content_only}")
     logging.info(f"Dry run: {args.dry_run}")
+    logging.info(f"Content provider: {args.content_provider}")
+    logging.info(f"Content seed: {args.content_seed}")
+    logging.info(f"Gemini model: {args.gemini_model}")
+    logging.info(f"Local LLM model: {args.local_llm_model}")
+    logging.info(f"Local LLM URL: {args.local_llm_url}")
     logging.info(f"Checkpointing: {not args.no_checkpoint}")
     logging.info("=" * 60)
 
@@ -2101,7 +2608,7 @@ Checkpointing:
     generator = ConfluenceDataGenerator(
         confluence_url=args.url,
         email=args.email,
-        api_token=api_token,
+        api_token=checked_api_token,
         prefix=args.prefix,
         size_bucket=args.size,
         dry_run=args.dry_run,
@@ -2110,6 +2617,12 @@ Checkpointing:
         settling_delay=args.settling_delay,
         content_only=args.content_only,
         checkpoint_manager=checkpoint_manager,
+        content_provider=create_content_provider(
+            args.content_provider,
+            seed=args.content_seed,
+            model=args.local_llm_model,
+            base_url=args.local_llm_url,
+        ),
     )
 
     # Run generation

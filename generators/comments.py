@@ -14,6 +14,7 @@ from .base import ConfluenceAPIClient
 
 if TYPE_CHECKING:
     from .checkpoint import CheckpointManager
+    from .content import ContentProvider
 
 
 class CommentGenerator(ConfluenceAPIClient):
@@ -30,6 +31,7 @@ class CommentGenerator(ConfluenceAPIClient):
         benchmark: Any | None = None,
         request_delay: float = 0.0,
         settling_delay: float = 0.0,
+        content_provider: "ContentProvider | None" = None,
         checkpoint: "CheckpointManager | None" = None,
     ):
         super().__init__(
@@ -41,6 +43,7 @@ class CommentGenerator(ConfluenceAPIClient):
             benchmark,
             request_delay,
             settling_delay,
+            content_provider,
         )
         self.prefix = prefix
         self.checkpoint = checkpoint
@@ -137,7 +140,9 @@ class CommentGenerator(ConfluenceAPIClient):
         Returns:
             Dict with 'id' and 'pageId' or None on failure
         """
-        body_content = f"<p>{self.generate_random_text(5, 15)}</p>"
+        body_content = self.generate_storage_value(
+            "footer_comment", f"Footer Comment {index}", metadata={"page_id": page_id}
+        )
 
         comment_data: dict[str, Any] = {
             "pageId": page_id,
@@ -227,7 +232,9 @@ class CommentGenerator(ConfluenceAPIClient):
             self.logger.warning(f"Failed to get page text for inline comment on page {page_id}")
             return None
 
-        body_content = f"<p>{self.generate_random_text(5, 15)}</p>"
+        body_content = self.generate_storage_value(
+            "inline_comment", f"Inline Comment {index}", metadata={"page_id": page_id}
+        )
 
         comment_data: dict[str, Any] = {
             "pageId": page_id,
@@ -321,7 +328,9 @@ class CommentGenerator(ConfluenceAPIClient):
 
         max_conflict_retries = 5
         for retry in range(max_conflict_retries):
-            new_body = f"<p>{self.generate_random_text(5, 15)}</p>"
+            new_body = self.generate_storage_value(
+                "comment", f"{comment_type} comment version", metadata={"comment_id": comment_id}
+            )
             update_data = {
                 "version": {
                     "number": current_version + 1,
@@ -402,7 +411,9 @@ class CommentGenerator(ConfluenceAPIClient):
         Returns:
             Dict with 'id' and 'pageId' or None on failure
         """
-        body_content = f"<p>{self.generate_random_text(5, 15)}</p>"
+        body_content = self.generate_storage_value(
+            "footer_comment", f"Footer Comment {index}", metadata={"page_id": page_id}
+        )
 
         comment_data: dict[str, Any] = {
             "pageId": page_id,
@@ -498,7 +509,9 @@ class CommentGenerator(ConfluenceAPIClient):
             self.logger.warning(f"Failed to get page text for inline comment on page {page_id}")
             return None
 
-        body_content = f"<p>{self.generate_random_text(5, 15)}</p>"
+        body_content = self.generate_storage_value(
+            "inline_comment", f"Inline Comment {index}", metadata={"page_id": page_id}
+        )
 
         comment_data: dict[str, Any] = {
             "pageId": page_id,
@@ -601,7 +614,9 @@ class CommentGenerator(ConfluenceAPIClient):
 
             current_version = comment_data.get("version", {}).get("number", 1)
 
-            new_body = f"<p>{self.generate_random_text(5, 15)}</p>"
+            new_body = self.generate_storage_value(
+                "comment", f"{comment_type} comment version", metadata={"comment_id": comment_id}
+            )
             update_data = {
                 "version": {
                     "number": current_version + 1,
@@ -704,7 +719,11 @@ class CommentGenerator(ConfluenceAPIClient):
                 max_conflict_retries = 5
                 for retry in range(max_conflict_retries):
                     next_version = current_version + 1
-                    new_body = f"<p>{self.generate_random_text(5, 15)}</p>"
+                    new_body = self.generate_storage_value(
+                        "comment",
+                        f"{comment_type} comment version",
+                        metadata={"comment_id": comment_id, "version": current_version + 1, "async": True},
+                    )
                     update_data = {
                         "version": {
                             "number": next_version,
